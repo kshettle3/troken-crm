@@ -90,7 +90,7 @@ export const SubDashboard: React.FC<SubDashboardProps> = ({ subs, jobs, allServi
   const sub = subs[0];
   if (!sub) return <div className="p-4">No sub assigned.</div>;
 
-  const [activeTab, setActiveTab] = useState<'properties'|'calendar'|'quotes'|'deadlines'>('properties');
+  const [activeTab, setActiveTab] = useState<'properties'|'calendar'|'quotes'|'deadlines'|'pay'>('properties');
   const [expandedJob, setExpandedJob] = useState<number|null>(null);
   const [notes, setNotes] = useState<Record<number, Note[]>>({});
   const [newNote, setNewNote] = useState<Record<number, string>>({});
@@ -159,14 +159,10 @@ export const SubDashboard: React.FC<SubDashboardProps> = ({ subs, jobs, allServi
       </div>
 
       {/* Summary Cards */}
-      <div className="grid grid-cols-3 gap-3">
+      <div className="grid grid-cols-2 gap-3">
         <div className="bg-base-200 rounded-lg p-3 text-center">
           <div className="text-base-content/60 text-xs flex items-center justify-center gap-1"><MapPin size={12}/> Sites</div>
           <div className="text-2xl font-bold">{subJobs.length}</div>
-        </div>
-        <div className="bg-base-200 rounded-lg p-3 text-center">
-          <div className="text-base-content/60 text-xs flex items-center justify-center gap-1"><DollarSign size={12}/> Total Pay</div>
-          <div className="text-2xl font-bold">{formatCurrency(totalPay)}</div>
         </div>
         <div className="bg-base-200 rounded-lg p-3 text-center">
           <div className="text-base-content/60 text-xs flex items-center justify-center gap-1"><Clock size={12}/> Due Soon</div>
@@ -187,6 +183,9 @@ export const SubDashboard: React.FC<SubDashboardProps> = ({ subs, jobs, allServi
         </button>
         <button className={`tab flex-1 ${activeTab === 'quotes' ? 'tab-active' : ''}`} onClick={() => setActiveTab('quotes')}>
           Quotes {pipelineJobs.length > 0 && <span className="badge badge-info badge-xs ml-1">{pipelineJobs.length}</span>}
+        </button>
+        <button className={`tab flex-1 ${activeTab === 'pay' ? 'tab-active' : ''}`} onClick={() => setActiveTab('pay')}>
+          <DollarSign size={13} className="mr-0.5" /> Pay
         </button>
       </div>
 
@@ -387,6 +386,47 @@ export const SubDashboard: React.FC<SubDashboardProps> = ({ subs, jobs, allServi
               );
             })
           )}
+        </div>
+      )}
+      {/* Pay Tab */}
+      {activeTab === 'pay' && (
+        <div className="space-y-4">
+          {/* Total Pay Card */}
+          <div className="card bg-success/10 border border-success/20">
+            <div className="card-body p-4">
+              <div className="flex items-center gap-2 text-success/80 text-sm">
+                <DollarSign size={16} /> Total Season Pay
+              </div>
+              <div className="text-3xl font-bold text-success">{formatCurrency(totalPay)}</div>
+              <div className="text-xs text-success/70">{subJobs.length} active sites</div>
+            </div>
+          </div>
+
+          {/* Per-Site Breakdown */}
+          <div>
+            <h3 className="font-semibold text-sm text-base-content/60 uppercase tracking-wide mb-2">By Site</h3>
+            <div className="space-y-2">
+              {subJobs
+                .map(job => ({ job, pay: calcJobSubCost(job.id, allServices) }))
+                .sort((a, b) => b.pay - a.pay)
+                .map(({ job, pay }) => (
+                  <div key={job.id} className="card bg-base-200">
+                    <div className="card-body p-3">
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <div className="font-medium">{job.property_name}</div>
+                          <div className="text-xs text-base-content/50">{job.client_name}{job.store_number ? ` #${job.store_number}` : ''}</div>
+                        </div>
+                        <div className="text-right">
+                          <div className="font-bold text-success">{formatCurrency(pay)}</div>
+                          <div className="text-xs text-base-content/50">{job.metro ?? ''}</div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+            </div>
+          </div>
         </div>
       )}
     </div>

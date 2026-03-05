@@ -97,6 +97,11 @@ export const SubDashboard: React.FC<SubDashboardProps> = ({ subs, jobs, allServi
   const [pipelineJobs, setPipelineJobs] = useState<PipelineJob[]>([]);
   const [expandedQuote, setExpandedQuote] = useState<number|null>(null);
   const [quoteLineItems, setQuoteLineItems] = useState<QuoteLineItem[]>([]);
+  const [submitting, setSubmitting] = useState<Record<number, boolean>>({});
+  const [quoteAmounts, setQuoteAmounts] = useState<Record<number, string>>({});
+  const [quoteNoteInputs, setQuoteNoteInputs] = useState<Record<number, string>>({});
+  const [lineItemInputs, setLineItemInputs] = useState<Record<number, Record<string, {amount: string; desc: string}>>>({});
+  const [submitError, setSubmitError] = useState<Record<number, string>>({});
 
   const subJobs = jobs.filter(j => j.sub_id === sub.id && j.status === 'active');
   const totalPay = subJobs.reduce((sum, j) => sum + calcJobSubCost(j.id, allServices), 0);
@@ -123,6 +128,89 @@ export const SubDashboard: React.FC<SubDashboardProps> = ({ subs, jobs, allServi
     );
     setNewNote(prev => ({...prev, [jobId]: ''}));
     loadNotes(jobId);
+  }
+
+  async function submitSimpleQuote(pj: PipelineJob) {
+    const amtStr = quoteAmounts[pj.id] ?? '';
+    const amt = parseFloat(amtStr.replace(/[^0-9.]/g, ''));
+    if (isNaN(amt) || amt <= 0) {
+      setSubmitError(prev => ({ ...prev, [pj.id]: 'Please enter a valid amount.' }));
+      return;
+    }
+    setSubmitting(prev => ({ ...prev, [pj.id]: true }));
+    setSubmitError(prev => ({ ...prev, [pj.id]: '' }));
+    const notes = quoteNoteInputs[pj.id] ?? '';
+    const now = new Date().toISOString();
+    await db.execute(
+      `UPDATE pipeline_jobs SET sub_quote_total = ${amt}, sub_quote_submitted_at = '${now}', sub_quote_notes = ${notes ? `'${notes.replace(/'/g, "''")}'` : 'NULL'}, updated_at = '${now}' WHERE id = ${pj.id}`
+    );
+    // Notify via webhook
+    const webhookUrl = import.meta.env.VITE_NOTIFY_WEBHOOK;
+    if (webhookUrl) {
+      fetch(webhookUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ property_name: pj.property_name, amount: amt, quote_format: pj.quote_format, sub_name: sub.name }),
+      }).catch(() => {/* silent */});
+    }
+    // Refresh pipeline jobs
+    const rows: any = await db.query(
+      `SELECT p.*, s.name as sub_name FROM pipeline_jobs p LEFT JOIN subs s ON p.sub_id = s.id WHERE p.sub_id = ${sub.id} AND p.stage = 'quote' ORDER BY p.deadline ASC`
+    );
+    setPipelineJobs(rows);
+    setSubmitting(prev => ({ ...prev, [pj.id]: false }));
+  }
+
+  async function submitBreakdownQuote(pj: PipelineJob) {
+    const categories = ['time', 'material', 'equipment', 'trip_charge', 'miscellaneous'];
+    const inputs = lineItemInputs[pj.id] ?? {};
+    const items = categories.map(cat => ({
+      cat,
+      amt: parseFloat((inputs[cat]?.amount ?? '').replace(/[^0-9.]/g, '')) || 0,
+      desc: inputs[cat]?.desc ?? '',
+    })).filter(i => i.amt > 0);
+
+    if (items.length === 0) {
+      setSubmitError(prev => ({ ...prev, [pj.id]: 'Please enter at least one line item amount.' }));
+      return;
+    }
+    setSubmitting(prev => ({ ...prev, [pj.id]: true }));
+    setSubmitError(prev => ({ ...prev, [pj.id]: '' }));
+    const total = items.reduce((s, i) => s + i.amt, 0);
+    const now = new Date().toISOString();
+    const notes = quoteNoteInputs[pj.id] ?? '';
+
+    // Delete any previous line items for this job
+    await db.execute(`DELETE FROM quote_line_items WHERE pipeline_job_id = ${pj.id}`);
+
+    // Insert each line item
+    for (const item of items) {
+      await db.execute(
+        `INSERT INTO quote_line_items (pipeline_job_id, category, description, amount) VALUES (${pj.id}, '${item.cat}', '${item.desc.replace(/'/g, "''")}', ${item.amt})`
+      );
+    }
+
+    // Update pipeline job
+    await db.execute(
+      `UPDATE pipeline_jobs SET sub_quote_total = ${total}, sub_quote_submitted_at = '${now}', sub_quote_notes = ${notes ? `'${notes.replace(/'/g, "''")}'` : 'NULL'}, updated_at = '${now}' WHERE id = ${pj.id}`
+    );
+
+    // Notify via webhook
+    const webhookUrl = import.meta.env.VITE_NOTIFY_WEBHOOK;
+    if (webhookUrl) {
+      fetch(webhookUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ property_name: pj.property_name, amount: total, quote_format: 'breakdown', sub_name: sub.name }),
+      }).catch(() => {/* silent */});
+    }
+
+    // Refresh
+    const rows: any = await db.query(
+      `SELECT p.*, s.name as sub_name FROM pipeline_jobs p LEFT JOIN subs s ON p.sub_id = s.id WHERE p.sub_id = ${sub.id} AND p.stage = 'quote' ORDER BY p.deadline ASC`
+    );
+    setPipelineJobs(rows);
+    setSubmitting(prev => ({ ...prev, [pj.id]: false }));
   }
 
   async function loadQuoteDetails(pjId: number) {
@@ -357,28 +445,128 @@ export const SubDashboard: React.FC<SubDashboardProps> = ({ subs, jobs, allServi
                             <p className="text-sm whitespace-pre-wrap bg-base-300 p-2 rounded">{pj.scope_notes}</p>
                           </div>
                         )}
-                        {pj.work_type === 'one_time' && pj.quote_format === 'breakdown' && (
-                          <div>
-                            <h4 className="text-xs font-semibold text-base-content/60 uppercase mb-1">Quote Breakdown Needed</h4>
-                            <div className="text-sm text-base-content/60">
-                              Categories: Time, Material, Equipment, Trip Charge, Miscellaneous
-                            </div>
-                          </div>
-                        )}
-                        {pj.work_type === 'one_time' && pj.quote_format === 'lump_sum' && (
-                          <div className="text-sm text-base-content/60">
-                            <span className="font-medium">Lump Sum</span> quote requested
-                          </div>
-                        )}
                         {pj.notes && (
                           <div>
-                            <h4 className="text-xs font-semibold text-base-content/60 uppercase mb-1">Notes</h4>
+                            <h4 className="text-xs font-semibold text-base-content/60 uppercase mb-1">Notes from Troken</h4>
                             <p className="text-sm">{pj.notes}</p>
                           </div>
                         )}
-                        <div className="bg-info/10 border border-info/30 rounded p-2 text-xs text-info">
-                          📋 Review this scope and submit your quote to Troken LLC
-                        </div>
+
+                        {/* Submitted state */}
+                        {pj.sub_quote_submitted_at != null ? (
+                          <div className="bg-success/10 border border-success/30 rounded p-3 space-y-1">
+                            <div className="flex items-center gap-2 text-success font-semibold">
+                              <span>✅ Quote Submitted</span>
+                              <span className="text-xl font-bold">${Math.round(pj.sub_quote_total ?? 0).toLocaleString()}</span>
+                            </div>
+                            {pj.sub_quote_notes && <p className="text-xs text-base-content/60">Note: {pj.sub_quote_notes}</p>}
+                            <p className="text-xs text-base-content/40">Submitted {new Date(pj.sub_quote_submitted_at!).toLocaleDateString()}</p>
+                            <p className="text-xs text-base-content/50 italic">Troken LLC is reviewing your quote.</p>
+                          </div>
+                        ) : (
+                          /* Submission forms */
+                          pj.quote_format === 'breakdown' ? (
+                            <div className="space-y-3">
+                              <h4 className="text-xs font-semibold text-base-content/60 uppercase">Quote Breakdown</h4>
+                              {(['time', 'material', 'equipment', 'trip_charge', 'miscellaneous'] as const).map(cat => {
+                                const labels: Record<string, string> = { time: 'Time (Labor)', material: 'Material', equipment: 'Equipment', trip_charge: 'Trip Charge', miscellaneous: 'Miscellaneous' };
+                                const val = lineItemInputs[pj.id]?.[cat] ?? { amount: '', desc: '' };
+                                return (
+                                  <div key={cat} className="grid grid-cols-2 gap-2 items-center">
+                                    <div>
+                                      <label className="text-xs text-base-content/60">{labels[cat]}</label>
+                                      <div className="flex items-center gap-1">
+                                        <span className="text-xs text-base-content/60">$</span>
+                                        <input
+                                          type="number"
+                                          placeholder="0"
+                                          className="input input-bordered input-xs w-full"
+                                          value={val.amount}
+                                          onChange={e => setLineItemInputs(prev => ({
+                                            ...prev,
+                                            [pj.id]: { ...(prev[pj.id] ?? {}), [cat]: { ...val, amount: e.target.value } }
+                                          }))}
+                                        />
+                                      </div>
+                                    </div>
+                                    <input
+                                      type="text"
+                                      placeholder="Description (optional)"
+                                      className="input input-bordered input-xs w-full"
+                                      value={val.desc}
+                                      onChange={e => setLineItemInputs(prev => ({
+                                        ...prev,
+                                        [pj.id]: { ...(prev[pj.id] ?? {}), [cat]: { ...val, desc: e.target.value } }
+                                      }))}
+                                    />
+                                  </div>
+                                );
+                              })}
+                              {/* Total preview */}
+                              {(() => {
+                                const inputs = lineItemInputs[pj.id] ?? {};
+                                const total = ['time','material','equipment','trip_charge','miscellaneous']
+                                  .reduce((s, cat) => s + (parseFloat(inputs[cat]?.amount ?? '') || 0), 0);
+                                return total > 0 ? (
+                                  <div className="text-right font-bold text-sm">Total: ${Math.round(total).toLocaleString()}</div>
+                                ) : null;
+                              })()}
+                              <div>
+                                <label className="text-xs font-semibold text-base-content/60 uppercase">Notes (optional)</label>
+                                <textarea
+                                  className="textarea textarea-bordered textarea-sm w-full mt-1"
+                                  rows={2}
+                                  placeholder="Any notes for Troken..."
+                                  value={quoteNoteInputs[pj.id] ?? ''}
+                                  onChange={e => setQuoteNoteInputs(prev => ({ ...prev, [pj.id]: e.target.value }))}
+                                />
+                              </div>
+                              {submitError[pj.id] && <p className="text-error text-xs">{submitError[pj.id]}</p>}
+                              <button
+                                className="btn btn-primary btn-sm w-full"
+                                disabled={submitting[pj.id]}
+                                onClick={() => submitBreakdownQuote(pj)}
+                              >
+                                {submitting[pj.id] ? <span className="loading loading-spinner loading-xs"/> : 'Submit Quote →'}
+                              </button>
+                            </div>
+                          ) : (
+                            /* lump_sum or contract */
+                            <div className="space-y-3">
+                              <div>
+                                <label className="text-xs font-semibold text-base-content/60 uppercase">Your Price</label>
+                                <div className="flex items-center gap-1 mt-1">
+                                  <span className="text-base-content/60 font-bold">$</span>
+                                  <input
+                                    type="number"
+                                    placeholder="0"
+                                    className="input input-bordered input-sm w-full"
+                                    value={quoteAmounts[pj.id] ?? ''}
+                                    onChange={e => setQuoteAmounts(prev => ({ ...prev, [pj.id]: e.target.value }))}
+                                  />
+                                </div>
+                              </div>
+                              <div>
+                                <label className="text-xs font-semibold text-base-content/60 uppercase">Notes (optional)</label>
+                                <textarea
+                                  className="textarea textarea-bordered textarea-sm w-full mt-1"
+                                  rows={2}
+                                  placeholder="Any notes for Troken..."
+                                  value={quoteNoteInputs[pj.id] ?? ''}
+                                  onChange={e => setQuoteNoteInputs(prev => ({ ...prev, [pj.id]: e.target.value }))}
+                                />
+                              </div>
+                              {submitError[pj.id] && <p className="text-error text-xs">{submitError[pj.id]}</p>}
+                              <button
+                                className="btn btn-primary btn-sm w-full"
+                                disabled={submitting[pj.id]}
+                                onClick={() => submitSimpleQuote(pj)}
+                              >
+                                {submitting[pj.id] ? <span className="loading loading-spinner loading-xs"/> : 'Submit Quote →'}
+                              </button>
+                            </div>
+                          )
+                        )}
                       </div>
                     )}
                   </div>

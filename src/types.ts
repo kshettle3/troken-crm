@@ -73,6 +73,8 @@ export interface PipelineJob {
   quote_format: string;
   scope_notes: string | null;
   sub_quote_total: number | null;
+  sub_quote_submitted_at: string | null;
+  sub_quote_notes: string | null;
   our_bid_total: number | null;
   notes: string | null;
   created_at: string;

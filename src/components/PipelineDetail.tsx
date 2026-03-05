@@ -24,6 +24,9 @@ export const PipelineDetail: React.FC<Props> = ({ jobId, onBack, onEdit }) => {
   const [lineItems, setLineItems] = useState<QuoteLineItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [ourBidInput, setOurBidInput] = useState<string>('');
+  const [savingBid, setSavingBid] = useState(false);
+  const [editingBid, setEditingBid] = useState(false);
 
   useEffect(() => {
     loadData();
@@ -54,6 +57,20 @@ export const PipelineDetail: React.FC<Props> = ({ jobId, onBack, onEdit }) => {
     setJob({ ...job, stage: newStage as PipelineJob['stage'] });
   }
 
+  async function saveOurBid() {
+    const amt = parseFloat(ourBidInput.replace(/[^0-9.]/g, ''));
+    if (isNaN(amt) || amt <= 0) return;
+    setSavingBid(true);
+    const now = new Date().toISOString();
+    await db.execute(
+      `UPDATE pipeline_jobs SET our_bid_total = ${amt}, updated_at = '${now}' WHERE id = ${jobId}`
+    );
+    await loadData();
+    setSavingBid(false);
+    setEditingBid(false);
+    setOurBidInput('');
+  }
+
   async function handleDelete() {
     await db.execute(`DELETE FROM quote_line_items WHERE pipeline_job_id = ${jobId}`);
     await db.execute(`DELETE FROM pipeline_jobs WHERE id = ${jobId}`);
@@ -61,10 +78,6 @@ export const PipelineDetail: React.FC<Props> = ({ jobId, onBack, onEdit }) => {
   }
 
   if (loading || !job) return <div className="flex justify-center p-12"><span className="loading loading-spinner loading-lg text-primary" /></div>;
-
-  const profit = (job.our_bid_total != null && job.sub_quote_total != null)
-    ? Math.round(job.our_bid_total - job.sub_quote_total)
-    : null;
 
   return (
     <div className="p-4 max-w-3xl mx-auto">
@@ -125,21 +138,83 @@ export const PipelineDetail: React.FC<Props> = ({ jobId, onBack, onEdit }) => {
           </div>
         </div>
         <div className="card bg-base-100 shadow">
-          <div className="card-body p-4">
+          <div className="card-body p-4 space-y-3">
             <h3 className="font-semibold text-sm text-base-content/60 uppercase">Financials</h3>
-            <div className="space-y-1">
-              {job.sub_quote_total != null && (
-                <p className="text-sm">Sub Quote: <span className="font-medium">${Math.round(job.sub_quote_total).toLocaleString()}</span></p>
-              )}
-              {job.our_bid_total != null && (
-                <p className="text-sm">Your Bid: <span className="font-medium">${Math.round(job.our_bid_total).toLocaleString()}</span></p>
-              )}
-              {profit != null && (
-                <p className={`text-sm font-bold ${profit >= 0 ? 'text-success' : 'text-error'}`}>
-                  Profit: ${profit.toLocaleString()}
-                </p>
+
+            {/* TC's submitted quote */}
+            {job.sub_quote_total != null ? (
+              <div className={`rounded p-3 space-y-1 ${job.sub_quote_submitted_at ? 'bg-info/10 border border-info/30' : 'bg-base-200'}`}>
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-semibold text-base-content/60 uppercase">
+                    {job.sub_quote_submitted_at ? '✅ TC Submitted' : 'TC Quote'}
+                  </span>
+                  <span className="font-bold text-lg">${Math.round(job.sub_quote_total).toLocaleString()}</span>
+                </div>
+                {job.sub_quote_notes && (
+                  <p className="text-xs text-base-content/60">"{job.sub_quote_notes}"</p>
+                )}
+                {job.sub_quote_submitted_at && (
+                  <p className="text-xs text-base-content/40">
+                    {new Date(job.sub_quote_submitted_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' })}
+                  </p>
+                )}
+              </div>
+            ) : (
+              <div className="bg-warning/10 border border-warning/30 rounded p-2">
+                <p className="text-xs text-warning font-medium">⏳ Waiting on TC's quote</p>
+              </div>
+            )}
+
+            {/* Your bid to DMG */}
+            <div>
+              <div className="flex items-center justify-between mb-1">
+                <span className="text-xs font-semibold text-base-content/60 uppercase">Your Bid to DMG</span>
+                {job.our_bid_total != null && !editingBid && (
+                  <button className="btn btn-ghost btn-xs" onClick={() => { setEditingBid(true); setOurBidInput(String(Math.round(job.our_bid_total!))); }}>Edit</button>
+                )}
+              </div>
+              {(job.our_bid_total == null || editingBid) ? (
+                <div className="flex gap-2 items-center">
+                  <div className="flex items-center gap-1 flex-1">
+                    <span className="text-base-content/60 font-bold">$</span>
+                    <input
+                      type="number"
+                      placeholder="Enter your bid"
+                      className="input input-bordered input-sm flex-1"
+                      value={ourBidInput || (editingBid && job.our_bid_total != null ? String(Math.round(job.our_bid_total)) : '')}
+                      onChange={e => setOurBidInput(e.target.value)}
+                    />
+                  </div>
+                  <button className="btn btn-primary btn-sm" onClick={saveOurBid} disabled={savingBid}>
+                    {savingBid ? <span className="loading loading-spinner loading-xs"/> : 'Save'}
+                  </button>
+                  {editingBid && (
+                    <button className="btn btn-ghost btn-sm" onClick={() => setEditingBid(false)}>Cancel</button>
+                  )}
+                </div>
+              ) : (
+                <p className="font-bold text-lg">${Math.round(job.our_bid_total).toLocaleString()}</p>
               )}
             </div>
+
+            {/* Profit */}
+            {job.our_bid_total != null && job.sub_quote_total != null && (() => {
+              const profitAmt = Math.round(job.our_bid_total - job.sub_quote_total);
+              const margin = job.our_bid_total > 0 ? Math.round((profitAmt / job.our_bid_total) * 100) : 0;
+              return (
+                <div className={`rounded p-2 ${profitAmt >= 0 ? 'bg-success/10' : 'bg-error/10'}`}>
+                  <div className="flex justify-between items-center">
+                    <span className="text-xs font-semibold text-base-content/60 uppercase">Profit</span>
+                    <div className="text-right">
+                      <span className={`font-bold ${profitAmt >= 0 ? 'text-success' : 'text-error'}`}>
+                        ${profitAmt.toLocaleString()}
+                      </span>
+                      <span className="text-xs text-base-content/60 ml-1">({margin}%)</span>
+                    </div>
+                  </div>
+                </div>
+              );
+            })()}
           </div>
         </div>
       </div>

@@ -49,6 +49,10 @@ export const SubCalendar: React.FC<SubCalendarProps> = ({ jobs, allServices, isP
   // Owner can unlock an entire week so TC can schedule past days (e.g., mid-week start)
   const [unlockedWeekStarts, setUnlockedWeekStarts] = useState<Set<string>>(new Set([toDateStr(baseWeekStart)])); // current week unlocked by default for initial setup
 
+  // Drag-and-drop state
+  const [draggingJobId, setDraggingJobId] = useState<number | null>(null);
+  const [dragOverDate, setDragOverDate] = useState<string | null>(null);
+
   // Get the week start for current offset
   const activeWeekStart = new Date(baseWeekStart);
   activeWeekStart.setDate(activeWeekStart.getDate() + weekOffset * 7);
@@ -380,6 +384,8 @@ export const SubCalendar: React.FC<SubCalendarProps> = ({ jobs, allServices, isP
                     isSelected={assigning === p.jobId}
                     countdown={getPropertyCountdown(p.jobId)}
                     onTap={() => setAssigning(assigning === p.jobId ? null : p.jobId)}
+                    onDragStart={(jobId) => { setDraggingJobId(jobId); setAssigning(null); }}
+                    onDragEnd={() => { setDraggingJobId(null); setDragOverDate(null); }}
                   />
                 ))}
               </div>
@@ -399,11 +405,18 @@ export const SubCalendar: React.FC<SubCalendarProps> = ({ jobs, allServices, isP
                     isSelected={assigning === p.jobId}
                     countdown={getPropertyCountdown(p.jobId)}
                     onTap={() => setAssigning(assigning === p.jobId ? null : p.jobId)}
+                    onDragStart={(jobId) => { setDraggingJobId(jobId); setAssigning(null); }}
+                    onDragEnd={() => { setDraggingJobId(null); setDragOverDate(null); }}
                   />
                 ))}
               </div>
             </div>
           )}
+
+          {/* Desktop hint */}
+          <p className="hidden md:block text-xs text-base-content/40 text-center mt-1">
+            Drag or tap a property to schedule it
+          </p>
         </div>
       )}
 
@@ -449,7 +462,23 @@ export const SubCalendar: React.FC<SubCalendarProps> = ({ jobs, allServices, isP
         return (
           <div
             key={dateStr}
-            className={`rounded-lg border ${isToday ? 'border-primary bg-primary/5' : 'border-base-300 bg-base-200'}`}
+            className={`rounded-lg border ${isToday ? 'border-primary bg-primary/5' : 'border-base-300 bg-base-200'} ${dragOverDate === dateStr ? 'ring-2 ring-primary ring-offset-1' : ''}`}
+            onDragOver={(e) => {
+              if (!isPast(dateStr) && draggingJobId !== null) {
+                e.preventDefault();
+                setDragOverDate(dateStr);
+              }
+            }}
+            onDragLeave={() => setDragOverDate(null)}
+            onDrop={(e) => {
+              e.preventDefault();
+              const jobId = parseInt(e.dataTransfer.getData('jobId'));
+              if (jobId && !isPast(dateStr)) {
+                assignToDay(jobId, dateStr);
+                setDraggingJobId(null);
+                setDragOverDate(null);
+              }
+            }}
           >
             <div className="flex items-center justify-between p-2 border-b border-base-300">
               <div className="flex items-center gap-2">
@@ -666,9 +695,11 @@ interface PropertyTileProps {
   isSelected: boolean;
   countdown: { days: number; overdue: boolean } | null;
   onTap: () => void;
+  onDragStart: (jobId: number) => void;
+  onDragEnd: () => void;
 }
 
-const PropertyTile: React.FC<PropertyTileProps> = ({ property, isSelected, countdown, onTap }) => {
+const PropertyTile: React.FC<PropertyTileProps> = ({ property, isSelected, countdown, onTap, onDragStart, onDragEnd }) => {
   // Shorten name for mobile tiles
   const shortName = property.name.length > 20 
     ? property.name.replace(/Family Dollar \(DT\)/, 'FD').replace(/Ferguson Enterprises/, 'Ferguson').replace(/PNC Bank: Chandler Commons/, 'PNC Bank')
@@ -680,6 +711,9 @@ const PropertyTile: React.FC<PropertyTileProps> = ({ property, isSelected, count
         countdown?.overdue ? 'border-error text-error' : ''
       } ${property.isLowes ? 'border-warning' : ''}`}
       onClick={onTap}
+      draggable={true}
+      onDragStart={(e) => { e.dataTransfer.setData('jobId', String(property.jobId)); onDragStart(property.jobId); }}
+      onDragEnd={() => onDragEnd()}
     >
       <span className="truncate max-w-[120px]">{shortName}</span>
       <span className="text-[10px] opacity-60">{getFrequencyLabel(property.frequency)}</span>

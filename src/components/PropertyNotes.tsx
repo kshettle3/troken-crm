@@ -26,6 +26,8 @@ export const PropertyNotes: React.FC<PropertyNotesProps> = ({ jobId, viewMode })
   const [notes, setNotes] = useState<Note[]>([]);
   const [newNote, setNewNote] = useState('');
   const [saving, setSaving] = useState(false);
+  const [editingNoteId, setEditingNoteId] = useState<number | null>(null);
+  const [editContent, setEditContent] = useState('');
 
   useEffect(() => {
     loadNotes();
@@ -64,6 +66,20 @@ export const PropertyNotes: React.FC<PropertyNotesProps> = ({ jobId, viewMode })
       setNotes(prev => prev.filter(n => n.id !== noteId));
     } catch (err) {
       console.error('Failed to delete note:', err);
+    }
+  }
+
+  async function handleEdit(noteId: number) {
+    if (!editContent.trim()) return;
+    try {
+      await db.execute(
+        `UPDATE notes SET content = '${editContent.replace(/'/g, "''")}' WHERE id = ${noteId}`
+      );
+      setEditingNoteId(null);
+      setEditContent('');
+      await loadNotes();
+    } catch (err) {
+      console.error('Failed to edit note:', err);
     }
   }
 
@@ -128,16 +144,55 @@ export const PropertyNotes: React.FC<PropertyNotesProps> = ({ jobId, viewMode })
           <div className="space-y-2 max-h-64 overflow-y-auto">
             {notes.map(note => (
               <div key={note.id} className="bg-base-100 rounded-lg p-3 relative group">
-                <p className="text-sm whitespace-pre-wrap">{note.content}</p>
-                <div className="flex items-center justify-between mt-2">
-                  <span className="text-xs text-base-content/40">{formatTimestamp(note.created_at)}</span>
-                  <button
-                    className="btn btn-ghost btn-xs text-error opacity-0 group-hover:opacity-100 transition-opacity"
-                    onClick={() => handleDelete(note.id)}
-                  >
-                    Delete
-                  </button>
-                </div>
+                {editingNoteId === note.id ? (
+                  // Edit mode
+                  <div className="space-y-2">
+                    <textarea
+                      className="textarea textarea-bordered textarea-sm w-full"
+                      rows={3}
+                      value={editContent}
+                      onChange={e => setEditContent(e.target.value)}
+                      autoFocus
+                    />
+                    <div className="flex gap-2 justify-end">
+                      <button
+                        className="btn btn-ghost btn-xs"
+                        onClick={() => { setEditingNoteId(null); setEditContent(''); }}
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        className="btn btn-primary btn-xs"
+                        onClick={() => handleEdit(note.id)}
+                        disabled={!editContent.trim()}
+                      >
+                        Save
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  // View mode
+                  <>
+                    <p className="text-sm whitespace-pre-wrap">{note.content}</p>
+                    <div className="flex items-center justify-between mt-2">
+                      <span className="text-xs text-base-content/40">{formatTimestamp(note.created_at)}</span>
+                      <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <button
+                          className="btn btn-ghost btn-xs"
+                          onClick={() => { setEditingNoteId(note.id); setEditContent(note.content); }}
+                        >
+                          Edit
+                        </button>
+                        <button
+                          className="btn btn-ghost btn-xs text-error"
+                          onClick={() => handleDelete(note.id)}
+                        >
+                          Delete
+                        </button>
+                      </div>
+                    </div>
+                  </>
+                )}
               </div>
             ))}
           </div>

@@ -113,4 +113,4 @@ export interface CalendarVisit {
   client_name?: string;
 }
 
-export type View = 'role-select' | 'sub-login' | 'sub-portal' | 'dashboard' | 'job-detail' | 'add-job' | 'edit-job' | 'sub-overview' | 'sub-dashboard' | 'pipeline' | 'pipeline-detail' | 'pipeline-new' | 'pipeline-edit';
+export type View = 'role-select' | 'owner-login' | 'sub-login' | 'sub-portal' | 'dashboard' | 'job-detail' | 'add-job' | 'edit-job' | 'sub-overview' | 'sub-dashboard' | 'pipeline' | 'pipeline-detail' | 'pipeline-new' | 'pipeline-edit';

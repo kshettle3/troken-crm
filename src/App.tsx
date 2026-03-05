@@ -1,7 +1,7 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import { createRoot } from 'react-dom/client';
+import React, { useState, useCallback } from 'react';
 import { View, Job, Sub, Service } from './types';
 import { RoleSelect } from './components/RoleSelect';
+import { OwnerLogin } from './components/OwnerLogin';
 import { SubLogin } from './components/SubLogin';
 import { Dashboard } from './components/Dashboard';
 import { JobDetail } from './components/JobDetail';
@@ -103,8 +103,15 @@ const App: React.FC = () => {
     case 'role-select':
       return (
         <RoleSelect
-          onOwner={handleOwnerLogin}
+          onOwner={() => setView('owner-login')}
           onContractor={() => setView('sub-login')}
+        />
+      );
+    case 'owner-login':
+      return (
+        <OwnerLogin
+          onSuccess={handleOwnerLogin}
+          onBack={() => setView('role-select')}
         />
       );
     case 'sub-login':
@@ -220,7 +227,5 @@ const App: React.FC = () => {
       return null;
   }
 };
-
-createRoot(document.getElementById('root')!).render(<App />);
 
 export default App;

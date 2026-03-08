@@ -11,6 +11,7 @@ import { SubDashboard } from './components/SubDashboard';
 import { PipelineList } from './components/PipelineList';
 import { PipelineForm } from './components/PipelineForm';
 import { PipelineDetail } from './components/PipelineDetail';
+import { SubPayments } from './components/SubPayments';
 import { db } from './db'
 
 const App: React.FC = () => {
@@ -21,6 +22,7 @@ const App: React.FC = () => {
   const [subs, setSubs] = useState<Sub[]>([]);
   const [allServices, setAllServices] = useState<Service[]>([]);
   const [loading, setLoading] = useState(false);
+  const [demoMode, setDemoMode] = useState(false);
 
   // Sub portal state
   const [loggedInSubId, setLoggedInSubId] = useState<number | null>(null);
@@ -45,6 +47,12 @@ const App: React.FC = () => {
   }, []);
 
   function handleOwnerLogin() {
+    setDemoMode(false);
+    loadData().then(() => setView('dashboard'));
+  }
+
+  function handleDemoLogin() {
+    setDemoMode(true);
     loadData().then(() => setView('dashboard'));
   }
 
@@ -57,6 +65,7 @@ const App: React.FC = () => {
   function handleLogout() {
     setLoggedInSubId(null);
     setLoggedInSubName('');
+    setDemoMode(false);
     setView('role-select');
   }
 
@@ -105,6 +114,7 @@ const App: React.FC = () => {
         <RoleSelect
           onOwner={() => setView('owner-login')}
           onContractor={() => setView('sub-login')}
+          onDemo={handleDemoLogin}
         />
       );
     case 'owner-login':
@@ -142,7 +152,9 @@ const App: React.FC = () => {
           onSubOverview={() => setView('sub-overview')}
           onPipeline={() => setView('pipeline')}
           onSubDashboard={() => setView('sub-dashboard')}
+          onPayments={() => setView('sub-payments')}
           onLogout={handleLogout}
+          demoMode={demoMode}
         />
       );
     case 'job-detail':
@@ -152,6 +164,7 @@ const App: React.FC = () => {
           onBack={() => { setView('dashboard'); loadData(); }}
           onEdit={handleEditJob}
           onDelete={handleDeleteJob}
+          demoMode={demoMode}
         />
       );
     case 'add-job':
@@ -189,6 +202,13 @@ const App: React.FC = () => {
           allServices={allServices}
           onBack={() => { setView('dashboard'); loadData(); }}
           onSelectJob={handleSelectJob}
+        />
+      );
+    case 'sub-payments':
+      return (
+        <SubPayments
+          subs={subs}
+          onBack={() => { setView('dashboard'); loadData(); }}
         />
       );
     case 'pipeline':

@@ -11,6 +11,7 @@ import { SubDashboard } from './components/SubDashboard';
 import { PipelineList } from './components/PipelineList';
 import { PipelineForm } from './components/PipelineForm';
 import { PipelineDetail } from './components/PipelineDetail';
+import { SubPayments } from './components/SubPayments';
 import { db } from './db'
 
 const App: React.FC = () => {
@@ -142,6 +143,7 @@ const App: React.FC = () => {
           onSubOverview={() => setView('sub-overview')}
           onPipeline={() => setView('pipeline')}
           onSubDashboard={() => setView('sub-dashboard')}
+          onPayments={() => setView('sub-payments')}
           onLogout={handleLogout}
         />
       );
@@ -189,6 +191,13 @@ const App: React.FC = () => {
           allServices={allServices}
           onBack={() => { setView('dashboard'); loadData(); }}
           onSelectJob={handleSelectJob}
+        />
+      );
+    case 'sub-payments':
+      return (
+        <SubPayments
+          subs={subs}
+          onBack={() => { setView('dashboard'); loadData(); }}
         />
       );
     case 'pipeline':

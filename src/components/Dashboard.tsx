@@ -25,10 +25,11 @@ interface DashboardProps {
   onSubOverview: () => void;
   onPipeline: () => void;
   onSubDashboard: () => void;
+  onPayments: () => void;
   onLogout?: () => void;
 }
 
-export const Dashboard: React.FC<DashboardProps> = ({ jobs, allServices, onSelectJob, onAddJob, onSubOverview, onPipeline, onSubDashboard, onLogout }) => {
+export const Dashboard: React.FC<DashboardProps> = ({ jobs, allServices, onSelectJob, onAddJob, onSubOverview, onPipeline, onSubDashboard, onPayments, onLogout }) => {
   const [activeTab, setActiveTab] = useState<'jobs' | 'financials'>('jobs');
 
   const activeJobs = jobs.filter(j => j.status === 'active');
@@ -78,6 +79,9 @@ export const Dashboard: React.FC<DashboardProps> = ({ jobs, allServices, onSelec
         </button>
         <button className="btn btn-warning btn-sm btn-outline" onClick={onSubDashboard}>
           <Eye size={16} /> View as Sub
+        </button>
+        <button className="btn btn-info btn-sm btn-outline" onClick={onPayments}>
+          💰 Payments
         </button>
       </div>
 

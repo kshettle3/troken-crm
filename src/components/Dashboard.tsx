@@ -27,9 +27,10 @@ interface DashboardProps {
   onSubDashboard: () => void;
   onPayments: () => void;
   onLogout?: () => void;
+  demoMode?: boolean;
 }
 
-export const Dashboard: React.FC<DashboardProps> = ({ jobs, allServices, onSelectJob, onAddJob, onSubOverview, onPipeline, onSubDashboard, onPayments, onLogout }) => {
+export const Dashboard: React.FC<DashboardProps> = ({ jobs, allServices, onSelectJob, onAddJob, onSubOverview, onPipeline, onSubDashboard, onPayments, onLogout, demoMode }) => {
   const [activeTab, setActiveTab] = useState<'jobs' | 'financials'>('jobs');
 
   const activeJobs = jobs.filter(j => j.status === 'active');
@@ -54,55 +55,73 @@ export const Dashboard: React.FC<DashboardProps> = ({ jobs, allServices, onSelec
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-xl font-bold">🌿 Troken LLC</h1>
-          <p className="text-xs text-base-content/50">Job Manager</p>
+          <p className="text-xs text-base-content/50">
+            {demoMode ? 'Job Manager — Demo' : 'Job Manager'}
+          </p>
         </div>
         <div className="flex items-center gap-2">
           <div className="badge badge-lg badge-neutral">{activeJobs.length} Active Jobs</div>
           {onLogout && (
             <button className="btn btn-ghost btn-sm text-base-content/60" onClick={onLogout}>
-              <LogOut size={14} /> Logout
+              <LogOut size={14} /> {demoMode ? 'Exit Demo' : 'Logout'}
             </button>
           )}
         </div>
       </div>
 
-      {/* Actions */}
+      {/* Actions — hide sub-related buttons in demo mode */}
       <div className="flex flex-wrap gap-2">
-        <button className="btn btn-primary btn-sm" onClick={onAddJob}>
-          <Plus size={16} /> Add Job
-        </button>
-        <button className="btn btn-secondary btn-sm btn-outline" onClick={onSubOverview}>
-          <Users size={16} /> Sub Overview
-        </button>
+        {!demoMode && (
+          <>
+            <button className="btn btn-primary btn-sm" onClick={onAddJob}>
+              <Plus size={16} /> Add Job
+            </button>
+            <button className="btn btn-secondary btn-sm btn-outline" onClick={onSubOverview}>
+              <Users size={16} /> Sub Overview
+            </button>
+          </>
+        )}
         <button className="btn btn-accent btn-sm btn-outline" onClick={onPipeline}>
           <GitBranch size={16} /> Pipeline
         </button>
-        <button className="btn btn-warning btn-sm btn-outline" onClick={onSubDashboard}>
-          <Eye size={16} /> View as Sub
-        </button>
-        <button className="btn btn-info btn-sm btn-outline" onClick={onPayments}>
-          💰 Payments
-        </button>
+        {!demoMode && (
+          <>
+            <button className="btn btn-warning btn-sm btn-outline" onClick={onSubDashboard}>
+              <Eye size={16} /> View as Sub
+            </button>
+            <button className="btn btn-info btn-sm btn-outline" onClick={onPayments}>
+              💰 Payments
+            </button>
+          </>
+        )}
       </div>
 
-      {/* Tab Navigation */}
-      <div className="tabs tabs-boxed bg-base-200">
-        <button
-          className={`tab flex-1 ${activeTab === 'jobs' ? 'tab-active' : ''}`}
-          onClick={() => setActiveTab('jobs')}
-        >
-          <Briefcase size={14} className="mr-1" /> Jobs
-        </button>
-        <button
-          className={`tab flex-1 ${activeTab === 'financials' ? 'tab-active' : ''}`}
-          onClick={() => setActiveTab('financials')}
-        >
-          <BarChart2 size={14} className="mr-1" /> Financials
-        </button>
-      </div>
+      {/* Tab Navigation — hide financials tab in demo (shows sub costs) */}
+      {!demoMode ? (
+        <div className="tabs tabs-boxed bg-base-200">
+          <button
+            className={`tab flex-1 ${activeTab === 'jobs' ? 'tab-active' : ''}`}
+            onClick={() => setActiveTab('jobs')}
+          >
+            <Briefcase size={14} className="mr-1" /> Jobs
+          </button>
+          <button
+            className={`tab flex-1 ${activeTab === 'financials' ? 'tab-active' : ''}`}
+            onClick={() => setActiveTab('financials')}
+          >
+            <BarChart2 size={14} className="mr-1" /> Financials
+          </button>
+        </div>
+      ) : (
+        <div className="tabs tabs-boxed bg-base-200">
+          <button className="tab flex-1 tab-active">
+            <Briefcase size={14} className="mr-1" /> Jobs
+          </button>
+        </div>
+      )}
 
       {/* Jobs Tab */}
-      {activeTab === 'jobs' && (
+      {(activeTab === 'jobs' || demoMode) && (
         <div className="overflow-x-auto">
           <table className="table table-zebra w-full">
             <thead>
@@ -131,8 +150,8 @@ export const Dashboard: React.FC<DashboardProps> = ({ jobs, allServices, onSelec
         </div>
       )}
 
-      {/* Financials Tab */}
-      {activeTab === 'financials' && (
+      {/* Financials Tab — only in owner mode */}
+      {!demoMode && activeTab === 'financials' && (
         <div className="space-y-4">
           {/* Summary Cards */}
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">

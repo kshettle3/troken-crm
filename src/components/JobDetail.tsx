@@ -11,9 +11,10 @@ interface JobDetailProps {
   onBack: () => void;
   onEdit: (id: number) => void;
   onDelete: (id: number) => void;
+  demoMode?: boolean;
 }
 
-export const JobDetail: React.FC<JobDetailProps> = ({ jobId, onBack, onEdit, onDelete }) => {
+export const JobDetail: React.FC<JobDetailProps> = ({ jobId, onBack, onEdit, onDelete, demoMode }) => {
   const [job, setJob] = useState<Job | null>(null);
   const [services, setServices] = useState<Service[]>([]);
   const [loading, setLoading] = useState(true);
@@ -75,8 +76,12 @@ export const JobDetail: React.FC<JobDetailProps> = ({ jobId, onBack, onEdit, onD
           <p className="text-sm text-base-content/60">{job.property_address}</p>
         </div>
         <span className={`badge ${getStatusColor(job.status)}`}>{job.status}</span>
-        <button className="btn btn-ghost btn-sm" onClick={() => onEdit(job.id)}><Edit size={16} /></button>
-        <button className="btn btn-ghost btn-sm text-error" onClick={() => onDelete(job.id)}><Trash2 size={16} /></button>
+        {!demoMode && (
+          <>
+            <button className="btn btn-ghost btn-sm" onClick={() => onEdit(job.id)}><Edit size={16} /></button>
+            <button className="btn btn-ghost btn-sm text-error" onClick={() => onDelete(job.id)}><Trash2 size={16} /></button>
+          </>
+        )}
       </div>
 
       {/* Client & Agreement Info */}
@@ -103,41 +108,67 @@ export const JobDetail: React.FC<JobDetailProps> = ({ jobId, onBack, onEdit, onD
         </div>
       </div>
 
-      {/* Financials */}
+      {/* Financials — Demo mode shows only contract value, no sub info */}
       <div className="card bg-base-200">
         <div className="card-body p-4">
           <h3 className="font-semibold flex items-center gap-2 mb-3"><DollarSign size={16} className="opacity-60" /> Financials</h3>
-          <div className="grid grid-cols-3 gap-4 text-center">
-            <div>
-              <div className="text-base-content/60 text-sm">DMG Pays You</div>
-              <div className="text-xl font-bold">{formatCurrency(job.total_contract_value)}</div>
-            </div>
-            <div>
-              <div className="text-base-content/60 text-sm">Sub ({job.sub_name ?? 'Unassigned'})</div>
-              <div className="text-xl font-bold">{formatCurrency(subPay)}</div>
-            </div>
-            <div>
-              <div className="text-base-content/60 text-sm">Your Profit</div>
-              <div className="text-xl font-bold text-success">{formatCurrency(profit)}</div>
-            </div>
-          </div>
-          {totalVisits > 0 && (
+          {demoMode ? (
             <>
-              <div className="divider my-2 text-xs text-base-content/40">Per Visit ({billableVisits} routine visits)</div>
-              <div className="grid grid-cols-3 gap-4 text-center">
+              <div className="grid grid-cols-2 gap-4 text-center">
                 <div>
-                  <div className="text-base-content/60 text-sm">Routine Visit Rate</div>
-                  <div className="text-lg font-bold">{formatCurrency(routineVisitRate)}</div>
+                  <div className="text-base-content/60 text-sm">Contract Value</div>
+                  <div className="text-xl font-bold">{formatCurrency(job.total_contract_value)}</div>
                 </div>
                 <div>
-                  <div className="text-base-content/60 text-sm">Per Visit Sub Cost</div>
-                  <div className="text-lg font-bold">{formatCurrency(perVisitSub)}</div>
-                </div>
-                <div>
-                  <div className="text-base-content/60 text-sm">Per Visit Profit</div>
-                  <div className="text-lg font-bold text-success">{formatCurrency(perVisitProfit)}</div>
+                  <div className="text-base-content/60 text-sm">Total Visits</div>
+                  <div className="text-xl font-bold">{totalVisits || '—'}</div>
                 </div>
               </div>
+              {routineVisitRate > 0 && (
+                <>
+                  <div className="divider my-2 text-xs text-base-content/40">Per Visit ({billableVisits} routine visits)</div>
+                  <div className="text-center">
+                    <div className="text-base-content/60 text-sm">Visit Rate</div>
+                    <div className="text-lg font-bold">{formatCurrency(routineVisitRate)}</div>
+                  </div>
+                </>
+              )}
+            </>
+          ) : (
+            <>
+              <div className="grid grid-cols-3 gap-4 text-center">
+                <div>
+                  <div className="text-base-content/60 text-sm">DMG Pays You</div>
+                  <div className="text-xl font-bold">{formatCurrency(job.total_contract_value)}</div>
+                </div>
+                <div>
+                  <div className="text-base-content/60 text-sm">Sub ({job.sub_name ?? 'Unassigned'})</div>
+                  <div className="text-xl font-bold">{formatCurrency(subPay)}</div>
+                </div>
+                <div>
+                  <div className="text-base-content/60 text-sm">Your Profit</div>
+                  <div className="text-xl font-bold text-success">{formatCurrency(profit)}</div>
+                </div>
+              </div>
+              {totalVisits > 0 && (
+                <>
+                  <div className="divider my-2 text-xs text-base-content/40">Per Visit ({billableVisits} routine visits)</div>
+                  <div className="grid grid-cols-3 gap-4 text-center">
+                    <div>
+                      <div className="text-base-content/60 text-sm">Routine Visit Rate</div>
+                      <div className="text-lg font-bold">{formatCurrency(routineVisitRate)}</div>
+                    </div>
+                    <div>
+                      <div className="text-base-content/60 text-sm">Per Visit Sub Cost</div>
+                      <div className="text-lg font-bold">{formatCurrency(perVisitSub)}</div>
+                    </div>
+                    <div>
+                      <div className="text-base-content/60 text-sm">Per Visit Profit</div>
+                      <div className="text-lg font-bold text-success">{formatCurrency(perVisitProfit)}</div>
+                    </div>
+                  </div>
+                </>
+              )}
             </>
           )}
         </div>
@@ -192,11 +223,16 @@ export const JobDetail: React.FC<JobDetailProps> = ({ jobId, onBack, onEdit, onD
         </div>
       </div>
 
-      {/* Notes — Owner sees Internal + Shared */}
-      <PropertyNotes jobId={jobId} viewMode="owner" />
+      {/* Notes & Contacts — hide in demo mode */}
+      {!demoMode && (
+        <>
+          {/* Notes — Owner sees Internal + Shared */}
+          <PropertyNotes jobId={jobId} viewMode="owner" />
 
-      {/* Contacts — Owner only */}
-      <PropertyContacts jobId={jobId} />
+          {/* Contacts — Owner only */}
+          <PropertyContacts jobId={jobId} />
+        </>
+      )}
     </div>
   );
 };

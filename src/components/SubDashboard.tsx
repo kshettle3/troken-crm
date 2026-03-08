@@ -77,6 +77,245 @@ function getUpcomingServices(jobs: Job[], allServices: Service[], daysAhead: num
   return upcoming;
 }
 
+// ─── Pay Tab Component ───────────────────────────────────────────────────────
+
+interface VisitRow {
+  id: number;
+  job_id: number;
+  scheduled_date: string;
+  checked_in_at: string | null;
+  property_name: string;
+  metro: string | null;
+  visit_pay: number;
+}
+
+interface MonthData {
+  month: string; // YYYY-MM
+  visits: VisitRow[];
+  totalPay: number;
+  visitCount: number;
+  paymentStatus: 'pending' | 'paid' | null;
+  paidDate: string | null;
+}
+
+function getFirstFriday(year: number, month: number): Date {
+  const d = new Date(year, month, 1);
+  while (d.getDay() !== 5) d.setDate(d.getDate() + 1);
+  return d;
+}
+
+function formatMonthLabel(ym: string): string {
+  const [y, m] = ym.split('-').map(Number);
+  return new Date(y, m - 1, 1).toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+}
+
+interface PayTabProps {
+  subId: number;
+  subJobs: Job[];
+  allServices: Service[];
+  totalPay: number;
+  isPortalMode?: boolean;
+}
+
+const PayTab: React.FC<PayTabProps> = ({ subId, subJobs, allServices, totalPay, isPortalMode }) => {
+  const [monthlyData, setMonthlyData] = useState<MonthData[]>([]);
+  const [expandedMonth, setExpandedMonth] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    loadPayData();
+  }, [subId]);
+
+  async function loadPayData() {
+    setLoading(true);
+    try {
+      // Get all checked-in visits with calculated pay
+      const visits: any[] = await db.query(
+        `SELECT cv.id, cv.job_id, cv.scheduled_date, cv.checked_in_at,
+               j.property_name, j.metro,
+               COALESCE(
+                 (SELECT SUM(CASE 
+                   WHEN s.sub_per_visit_rate IS NOT NULL THEN s.sub_per_visit_rate
+                   WHEN s.per_visit_rate IS NOT NULL AND s.per_visit_rate > 0 THEN 
+                     ROUND(s.per_visit_rate * COALESCE(s.sub_rate_pct, 80) / 100)
+                   ELSE 0
+                 END) FROM services s WHERE s.job_id = cv.job_id AND s.total_value > 0),
+                 0
+               ) as visit_pay
+        FROM calendar_visits cv
+        JOIN jobs j ON cv.job_id = j.id
+        WHERE cv.checked_in = 1 AND j.sub_id = ${subId}
+        ORDER BY cv.scheduled_date DESC`
+      );
+
+      // Get payment records
+      const payments: any[] = await db.query(
+        `SELECT * FROM sub_payments WHERE sub_id = ${subId}`
+      );
+      const paymentMap = new Map<string, any>();
+      payments.forEach(p => paymentMap.set(p.period_month, p));
+
+      // Group visits by month
+      const monthMap = new Map<string, VisitRow[]>();
+      for (const v of visits) {
+        const ym = (v.scheduled_date || '').substring(0, 7); // YYYY-MM
+        if (!ym) continue;
+        if (!monthMap.has(ym)) monthMap.set(ym, []);
+        monthMap.get(ym)!.push({
+          id: v.id,
+          job_id: v.job_id,
+          scheduled_date: v.scheduled_date,
+          checked_in_at: v.checked_in_at,
+          property_name: v.property_name,
+          metro: v.metro,
+          visit_pay: Number(v.visit_pay) || 0,
+        });
+      }
+
+      // Build month data sorted descending
+      const months: MonthData[] = [];
+      for (const [ym, vRows] of monthMap) {
+        const payment = paymentMap.get(ym);
+        months.push({
+          month: ym,
+          visits: vRows,
+          totalPay: vRows.reduce((s, v) => s + v.visit_pay, 0),
+          visitCount: vRows.length,
+          paymentStatus: payment ? payment.status : null,
+          paidDate: payment?.paid_date ?? null,
+        });
+      }
+      months.sort((a, b) => b.month.localeCompare(a.month));
+      setMonthlyData(months);
+    } catch (err) {
+      console.error('Failed to load pay data:', err);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  if (loading) {
+    return (
+      <div className="flex justify-center py-8">
+        <span className="loading loading-spinner loading-md text-primary" />
+      </div>
+    );
+  }
+
+  const now = new Date();
+  const currentYM = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  const currentMonthData = monthlyData.find(m => m.month === currentYM);
+
+  // Payment date = first Friday of following month
+  const nextMonth = now.getMonth() + 1;
+  const nextYear = nextMonth > 11 ? now.getFullYear() + 1 : now.getFullYear();
+  const paymentDate = getFirstFriday(nextYear, nextMonth > 11 ? 0 : nextMonth);
+
+  const pastMonths = monthlyData.filter(m => m.month !== currentYM);
+
+  return (
+    <div className="space-y-4">
+      {/* Current Month Earnings */}
+      <div className="card bg-primary/10 border border-primary/20">
+        <div className="card-body p-4">
+          <div className="flex items-center gap-2 text-primary text-sm font-semibold">
+            <DollarSign size={16} /> {formatMonthLabel(currentYM)} Earnings
+          </div>
+          <div className="text-3xl font-bold text-primary">
+            {formatCurrency(currentMonthData?.totalPay ?? 0)}
+          </div>
+          <div className="text-sm text-base-content/70">
+            {currentMonthData?.visitCount ?? 0} visits • {formatCurrency(currentMonthData?.totalPay ?? 0)} earned so far
+          </div>
+          <div className="text-xs text-base-content/50 mt-1">
+            📅 Payment Date: {paymentDate.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}
+          </div>
+        </div>
+      </div>
+
+      {/* Monthly History */}
+      {pastMonths.length > 0 && (
+        <div>
+          <h3 className="font-semibold text-sm text-base-content/60 uppercase tracking-wide mb-2">Monthly History</h3>
+          <div className="space-y-2">
+            {pastMonths.map(md => {
+              const isExpanded = expandedMonth === md.month;
+
+              // Group visits by property for breakdown
+              const byProperty = new Map<string, { name: string; visits: number; perVisit: number; total: number }>();
+              if (isExpanded) {
+                for (const v of md.visits) {
+                  const key = v.property_name;
+                  if (!byProperty.has(key)) byProperty.set(key, { name: key, visits: 0, perVisit: v.visit_pay, total: 0 });
+                  const entry = byProperty.get(key)!;
+                  entry.visits += 1;
+                  entry.total += v.visit_pay;
+                }
+              }
+              const propertyRows = isExpanded ? Array.from(byProperty.values()).sort((a, b) => b.total - a.total) : [];
+
+              return (
+                <div key={md.month} className="card bg-base-200">
+                  <div className="card-body p-3 space-y-2">
+                    <div
+                      className="flex justify-between items-center cursor-pointer"
+                      onClick={() => setExpandedMonth(isExpanded ? null : md.month)}
+                    >
+                      <div>
+                        <div className="font-bold text-sm">{formatMonthLabel(md.month)}</div>
+                        <div className="text-xs text-base-content/60">{md.visitCount} visits</div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <div className="text-right">
+                          <div className="font-bold text-sm">{formatCurrency(md.totalPay)}</div>
+                          {md.paymentStatus === 'paid' ? (
+                            <span className="badge badge-success badge-xs gap-1">✅ Paid{md.paidDate ? ` ${formatDate(md.paidDate)}` : ''}</span>
+                          ) : (
+                            <span className="badge badge-warning badge-xs gap-1">🟡 Pending</span>
+                          )}
+                        </div>
+                        {isExpanded ? <ChevronUp size={16}/> : <ChevronDown size={16}/>}
+                      </div>
+                    </div>
+
+                    {isExpanded && (
+                      <div className="pt-2 border-t border-base-300">
+                        <h4 className="text-xs font-semibold text-base-content/60 uppercase mb-1">Property Breakdown</h4>
+                        {propertyRows.map((row, i) => (
+                          <div key={i} className="flex justify-between text-sm py-1 border-b border-base-300 last:border-0">
+                            <div>
+                              <span className="font-medium">{row.name}</span>
+                              <span className="text-xs text-base-content/60 ml-1">({row.visits} visits × {formatCurrency(row.perVisit)})</span>
+                            </div>
+                            <span className="font-bold">{formatCurrency(row.total)}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Contract Season Total (reference) */}
+      <div className="card bg-success/10 border border-success/20">
+        <div className="card-body p-4">
+          <div className="flex items-center gap-2 text-success/80 text-sm">
+            <DollarSign size={16} /> Total Season Pay (Contract)
+          </div>
+          <div className="text-3xl font-bold text-success">{formatCurrency(totalPay)}</div>
+          <div className="text-xs text-success/70">{subJobs.length} active sites • Full contract value</div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// ─── SubDashboard Component ──────────────────────────────────────────────────
+
 interface SubDashboardProps {
   subs: Sub[];
   jobs: Job[];
@@ -578,44 +817,7 @@ export const SubDashboard: React.FC<SubDashboardProps> = ({ subs, jobs, allServi
       )}
       {/* Pay Tab */}
       {activeTab === 'pay' && (
-        <div className="space-y-4">
-          {/* Total Pay Card */}
-          <div className="card bg-success/10 border border-success/20">
-            <div className="card-body p-4">
-              <div className="flex items-center gap-2 text-success/80 text-sm">
-                <DollarSign size={16} /> Total Season Pay
-              </div>
-              <div className="text-3xl font-bold text-success">{formatCurrency(totalPay)}</div>
-              <div className="text-xs text-success/70">{subJobs.length} active sites</div>
-            </div>
-          </div>
-
-          {/* Per-Site Breakdown */}
-          <div>
-            <h3 className="font-semibold text-sm text-base-content/60 uppercase tracking-wide mb-2">By Site</h3>
-            <div className="space-y-2">
-              {subJobs
-                .map(job => ({ job, pay: calcJobSubCost(job.id, allServices) }))
-                .sort((a, b) => b.pay - a.pay)
-                .map(({ job, pay }) => (
-                  <div key={job.id} className="card bg-base-200">
-                    <div className="card-body p-3">
-                      <div className="flex items-center justify-between">
-                        <div>
-                          <div className="font-medium">{job.property_name}</div>
-                          <div className="text-xs text-base-content/50">{job.client_name}{job.store_number ? ` #${job.store_number}` : ''}</div>
-                        </div>
-                        <div className="text-right">
-                          <div className="font-bold text-success">{formatCurrency(pay)}</div>
-                          <div className="text-xs text-base-content/50">{job.metro ?? ''}</div>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                ))}
-            </div>
-          </div>
-        </div>
+        <PayTab subId={sub.id} subJobs={subJobs} allServices={allServices} totalPay={totalPay} isPortalMode={isPortalMode} />
       )}
     </div>
   );

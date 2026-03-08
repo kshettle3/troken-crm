@@ -1,6 +1,6 @@
 import React, { useState, useRef } from 'react';
 
-const OWNER_PIN = '6192';
+const OWNER_PIN = '3699';
 
 interface Props {
   onSuccess: () => void;

@@ -305,10 +305,18 @@ export const SubCalendar: React.FC<SubCalendarProps> = ({ jobs, allServices, isP
     return { days: diff, overdue: diff < 0 };
   }
 
-  // Check if a date is in the past (respects owner-unlocked weeks)
+  // Check if a date is in the past — locks after Saturday of that week passes
+  // TC can update any day in the current week (Mon-Sat), even after the day itself has passed
   function isPast(dateStr: string): boolean {
-    if (unlockedWeekStarts.has(weekStartStr)) return false; // entire week unlocked
-    return new Date(dateStr + 'T23:59:59') < today;
+    if (unlockedWeekStarts.has(weekStartStr)) return false; // owner-unlocked week override
+    const d = new Date(dateStr + 'T00:00:00');
+    // Find the Saturday (end) of the date's DMG week
+    const dayOfWeek = d.getDay(); // 0=Sun
+    const satOffset = dayOfWeek === 0 ? 6 : 6 - dayOfWeek;
+    const weekSaturday = new Date(d);
+    weekSaturday.setDate(weekSaturday.getDate() + satOffset);
+    weekSaturday.setHours(23, 59, 59, 999);
+    return weekSaturday < today;
   }
 
   // Week labels for the 3-week selector

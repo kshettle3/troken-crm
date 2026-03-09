@@ -115,4 +115,17 @@ export interface CalendarVisit {
   client_name?: string;
 }
 
-export type View = 'role-select' | 'owner-login' | 'sub-login' | 'sub-portal' | 'dashboard' | 'job-detail' | 'add-job' | 'edit-job' | 'sub-overview' | 'sub-dashboard' | 'pipeline' | 'pipeline-detail' | 'pipeline-new' | 'pipeline-edit';
+export interface SubPayment {
+  id: number;
+  sub_id: number;
+  period_month: string;
+  total_amount: number;
+  visit_count: number;
+  status: 'pending' | 'paid';
+  paid_date: string | null;
+  payment_method: string | null;
+  notes: string | null;
+  created_at: string;
+}
+
+export type View = 'role-select' | 'owner-login' | 'sub-login' | 'sub-portal' | 'dashboard' | 'job-detail' | 'add-job' | 'edit-job' | 'sub-overview' | 'sub-dashboard' | 'pipeline' | 'pipeline-detail' | 'pipeline-new' | 'pipeline-edit' | 'sub-payments';

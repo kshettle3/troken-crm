@@ -47,7 +47,7 @@ export const SubCalendar: React.FC<SubCalendarProps> = ({ jobs, allServices, isP
   const [checkInModal, setCheckInModal] = useState<CheckInModal | null>(null);
   const [completedServiceIds, setCompletedServiceIds] = useState<Set<number>>(new Set());
   // Owner can unlock an entire week so TC can schedule past days (e.g., mid-week start)
-  const [unlockedWeekStarts, setUnlockedWeekStarts] = useState<Set<string>>(new Set([toDateStr(baseWeekStart)])); // current week unlocked by default for initial setup
+  const [unlockedWeekStarts, setUnlockedWeekStarts] = useState<Set<string>>(new Set([toDateStr(baseWeekStart), '2026-03-01'])); // current week + owner-unlocked week of 3/1-3/7
 
   // Drag-and-drop state
   const [draggingJobId, setDraggingJobId] = useState<number | null>(null);

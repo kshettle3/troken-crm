@@ -510,7 +510,7 @@ export const SubDashboard: React.FC<SubDashboardProps> = ({ subs, jobs, allServi
   const sub = subs[0];
   if (!sub) return <div className="p-4">No sub assigned.</div>;
 
-  const [activeTab, setActiveTab] = useState<'properties'|'calendar'|'quotes'|'reqs'|'pay'>('properties');
+  const [activeTab, setActiveTab] = useState<'properties'|'calendar'|'quotes'|'reqs'|'standards'|'pay'>('properties');
   const [siteInstructions, setSiteInstructions] = useState<SiteInstruction[]>([]);
   const [expandedInstructionClient, setExpandedInstructionClient] = useState<string|null>(null);
   const [expandedJob, setExpandedJob] = useState<number|null>(null);

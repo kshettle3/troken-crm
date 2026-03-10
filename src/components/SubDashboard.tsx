@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { ArrowLeft, MapPin, DollarSign, Calendar, AlertTriangle, Clock, ChevronDown, ChevronUp, MessageSquare, Send, FileText } from 'lucide-react';
+import { ArrowLeft, MapPin, DollarSign, Calendar, AlertTriangle, Clock, ChevronDown, ChevronUp, MessageSquare, Send, FileText, ClipboardList, TrendingDown, CheckCircle } from 'lucide-react';
 import { SubCalendar } from './SubCalendar';
 import { Job, Sub, Service, Note, PipelineJob, QuoteLineItem } from '../types';
 import { formatCurrency, formatDate } from '../utils/helpers';
@@ -8,7 +8,6 @@ import { db } from '../db'
 // Calculate what TC gets paid for a service
 function calcSubServicePay(svc: Service): number {
   const visits = svc.total_visits ?? 0;
-  // If we have visits, use per-visit math
   if (visits > 0) {
     if (svc.sub_per_visit_rate != null) return svc.sub_per_visit_rate * visits;
     if (svc.per_visit_rate != null && svc.per_visit_rate > 0) {
@@ -16,20 +15,16 @@ function calcSubServicePay(svc: Service): number {
       return Math.round(pct * svc.per_visit_rate) * visits;
     }
   }
-  // Weekly contracts: no visit count but has per-visit rates — derive from total value
   if (visits === 0 && (svc.total_value ?? 0) > 0) {
     if (svc.sub_per_visit_rate != null && svc.per_visit_rate != null && svc.per_visit_rate > 0) {
       return Math.round((svc.total_value ?? 0) * (svc.sub_per_visit_rate / svc.per_visit_rate));
     }
-    // Fallback: percentage of total value
     const pct = svc.sub_rate_pct != null ? svc.sub_rate_pct / 100 : 0.80;
     return Math.round(pct * (svc.total_value ?? 0));
   }
-  // $0 service
   return 0;
 }
 
-// Get TC's per-visit rate for a service
 function getSubPerVisitRate(svc: Service): number | null {
   if (svc.sub_per_visit_rate != null) return svc.sub_per_visit_rate;
   if (svc.per_visit_rate != null && svc.per_visit_rate > 0) {
@@ -43,11 +38,17 @@ function calcJobSubCost(jobId: number, services: Service[]): number {
   return services.filter(s => s.job_id === jobId).reduce((sum, s) => sum + calcSubServicePay(s), 0);
 }
 
-// Strip owner's dollar amounts from schedule descriptions
-// e.g., "1 time per week (Apr-Oct) - $175.00/per visit" → "1 time per week (Apr-Oct)"
 function cleanScheduleForSub(desc: string | null): string {
   if (!desc) return '';
   return desc.replace(/\s*-\s*\$[\d,.]+\/per visit/gi, '').trim();
+}
+
+interface SiteInstruction {
+  id: number;
+  client_name: string;
+  category: string;
+  instructions: string[];
+  sort_order: number;
 }
 
 interface UpcomingService {
@@ -77,6 +78,425 @@ function getUpcomingServices(jobs: Job[], allServices: Service[], daysAhead: num
   return upcoming;
 }
 
+// ─── Pay Tab Component ───────────────────────────────────────────────────────
+
+interface LegacyCategory {
+  id: number;
+  category: 'jan_landscape' | 'feb_landscape' | 'snow';
+  original_amount: number;
+  paid_amount: number;
+}
+
+interface OneOffJob {
+  id: number;
+  job_name: string;
+  description: string | null;
+  dmg_invoice_number: string | null;
+  dmg_invoice_amount: number | null;
+  tc_amount: number;
+  invoice_status: 'pending_invoice' | 'pending_payment' | 'paid';
+  dmg_invoice_date: string | null;
+  dmg_expected_payment_date: string | null;
+  tc_payment_due_date: string | null;
+  tc_payment_date: string | null;
+  notes: string | null;
+}
+
+interface LegacyPaymentRecord {
+  id: number;
+  amount: number;
+  payment_date: string;
+  notes: string | null;
+}
+
+interface ContractInvoice {
+  id: number;
+  job_id: number | null;
+  crm_property_name: string | null;
+  customer: string;
+  dmg_invoice_number: string | null;
+  dmg_billing_number: string | null;
+  invoice_date: string | null;
+  dmg_expected_payment_date: string | null;
+  dmg_amount: number;
+  tc_amount: number;
+  invoice_status: 'pending_invoice' | 'pending_payment' | 'paid';
+  tc_payment_due_date: string | null;
+  tc_payment_date: string | null;
+}
+
+const CATEGORY_LABELS: Record<string, string> = {
+  jan_landscape: 'January Landscape',
+  feb_landscape: 'February Landscape',
+  snow: 'Snow Work',
+};
+
+const CATEGORY_ORDER = ['jan_landscape', 'feb_landscape', 'snow'];
+
+function getStatusInfo(status: string) {
+  switch (status) {
+    case 'pending_invoice':
+      return { emoji: '✅', label: 'Pending Invoice', color: 'text-info', bg: 'bg-info/10 border-info/30', desc: 'Work complete — waiting on DMG to invoice Troken. Timer starts when invoiced.' };
+    case 'pending_payment':
+      return { emoji: '📄', label: 'Pending Payment', color: 'text-warning', bg: 'bg-warning/10 border-warning/30', desc: 'DMG has invoiced Troken. You will be paid within 7 days of Troken receiving payment.' };
+    case 'paid':
+      return { emoji: '💸', label: 'Paid', color: 'text-success', bg: 'bg-success/10 border-success/30', desc: 'Payment sent.' };
+    default:
+      return { emoji: '❓', label: status, color: '', bg: 'bg-base-200', desc: '' };
+  }
+}
+
+interface PayTabProps {
+  subId: number;
+  subJobs: Job[];
+  allServices: Service[];
+  totalPay: number;
+  isPortalMode?: boolean;
+}
+
+const PayTab: React.FC<PayTabProps> = ({ subId }) => {
+  const [legacy, setLegacy] = useState<LegacyCategory[]>([]);
+  const [oneOffJobs, setOneOffJobs] = useState<OneOffJob[]>([]);
+  const [legacyPayments, setLegacyPayments] = useState<LegacyPaymentRecord[]>([]);
+  const [contractInvoices, setContractInvoices] = useState<ContractInvoice[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [expandedOneOff, setExpandedOneOff] = useState<number | null>(null);
+  const [expandedLegacy, setExpandedLegacy] = useState(false);
+  const [expandedContract, setExpandedContract] = useState<number | null>(null);
+
+  useEffect(() => {
+    loadData();
+  }, [subId]);
+
+  async function loadData() {
+    setLoading(true);
+    try {
+      const [legacyRows, oneOffRows, paymentRows, contractRows] = await Promise.all([
+        db.query(`SELECT * FROM legacy_balance WHERE sub_id = ${subId} ORDER BY CASE category WHEN 'jan_landscape' THEN 1 WHEN 'feb_landscape' THEN 2 WHEN 'snow' THEN 3 END`),
+        db.query(`SELECT * FROM one_off_jobs WHERE sub_id = ${subId} ORDER BY created_at ASC`),
+        db.query(`SELECT * FROM legacy_payments WHERE sub_id = ${subId} ORDER BY payment_date DESC`),
+        db.query(`SELECT * FROM contract_invoices WHERE sub_id = ${subId} ORDER BY invoice_date DESC`),
+      ]);
+      setLegacy(legacyRows as LegacyCategory[]);
+      setOneOffJobs(oneOffRows as OneOffJob[]);
+      setLegacyPayments(paymentRows as LegacyPaymentRecord[]);
+      setContractInvoices(contractRows as ContractInvoice[]);
+    } catch (err) {
+      console.error('Failed to load pay data:', err);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  if (loading) {
+    return (
+      <div className="flex justify-center py-8">
+        <span className="loading loading-spinner loading-md text-primary" />
+      </div>
+    );
+  }
+
+  // Calculate totals
+  const legacyRemaining = legacy.reduce((s, c) => s + (c.original_amount - c.paid_amount), 0);
+  const oneOffPending = oneOffJobs.filter(j => j.invoice_status !== 'paid').reduce((s, j) => s + j.tc_amount, 0);
+  const contractPending = contractInvoices.filter(i => i.invoice_status !== 'paid').reduce((s, i) => s + i.tc_amount, 0);
+  const totalOwed = legacyRemaining + oneOffPending + contractPending;
+
+  // Sort categories in FIFO order
+  const sortedLegacy = [...legacy].sort((a, b) =>
+    CATEGORY_ORDER.indexOf(a.category) - CATEGORY_ORDER.indexOf(b.category)
+  );
+
+  // Find the "active" FIFO category (first one not fully paid)
+  const activeCategory = sortedLegacy.find(c => c.original_amount - c.paid_amount > 0);
+
+  return (
+    <div className="space-y-4">
+
+      {/* ── Running Total Owed ── */}
+      <div className="card bg-base-300 border border-base-content/10">
+        <div className="card-body p-4">
+          <div className="text-xs text-base-content/60 uppercase tracking-wide font-semibold mb-1">Total Owed to You</div>
+          <div className="text-4xl font-bold">{formatCurrency(Math.round(totalOwed))}</div>
+          <div className="text-xs text-base-content/50 mt-1">
+            {formatCurrency(Math.round(legacyRemaining))} prior work · {formatCurrency(Math.round(oneOffPending))} one-off · {formatCurrency(Math.round(contractPending))} March contract
+          </div>
+        </div>
+      </div>
+
+      {/* ── Prior Work (Legacy Balance) ── */}
+      <div className="card bg-base-200">
+        <div
+          className="card-body p-3 cursor-pointer"
+          onClick={() => setExpandedLegacy(!expandedLegacy)}
+        >
+          <div className="flex justify-between items-center">
+            <div>
+              <div className="font-bold text-sm flex items-center gap-2">
+                <TrendingDown size={14} className="text-warning" />
+                Prior Work Balance
+              </div>
+              <div className="text-xs text-base-content/60 mt-0.5">Jan, Feb & Snow — paid down in order</div>
+            </div>
+            <div className="flex items-center gap-2">
+              <div className="text-right">
+                <div className="font-bold text-sm">{formatCurrency(Math.round(legacyRemaining))}</div>
+                <div className="text-xs text-base-content/50">remaining</div>
+              </div>
+              {expandedLegacy ? <ChevronUp size={16}/> : <ChevronDown size={16}/>}
+            </div>
+          </div>
+
+          {expandedLegacy && (
+            <div className="pt-3 border-t border-base-300 space-y-3 mt-2">
+              {sortedLegacy.map(cat => {
+                const remaining = cat.original_amount - cat.paid_amount;
+                const pct = cat.original_amount > 0 ? (cat.paid_amount / cat.original_amount) * 100 : 0;
+                const isActive = cat.category === activeCategory?.category;
+                const isCleared = remaining <= 0;
+
+                return (
+                  <div key={cat.id} className={`rounded-lg p-3 ${isCleared ? 'bg-success/10 border border-success/20' : isActive ? 'bg-primary/10 border border-primary/20' : 'bg-base-300'}`}>
+                    <div className="flex justify-between items-start mb-1.5">
+                      <div>
+                        <div className="text-sm font-semibold flex items-center gap-1">
+                          {isCleared && <CheckCircle size={12} className="text-success"/>}
+                          {CATEGORY_LABELS[cat.category]}
+                          {isActive && !isCleared && <span className="badge badge-xs badge-primary ml-1">Paying Now</span>}
+                        </div>
+                        <div className="text-xs text-base-content/50">
+                          {formatCurrency(cat.paid_amount)} paid of {formatCurrency(cat.original_amount)}
+                        </div>
+                      </div>
+                      <div className="text-right">
+                        <div className={`font-bold text-sm ${isCleared ? 'text-success' : ''}`}>
+                          {isCleared ? '✅ Cleared' : formatCurrency(Math.round(remaining))}
+                        </div>
+                        {!isCleared && <div className="text-xs text-base-content/50">left</div>}
+                      </div>
+                    </div>
+                    {/* Progress bar */}
+                    <div className="w-full bg-base-content/10 rounded-full h-1.5">
+                      <div
+                        className={`h-1.5 rounded-full ${isCleared ? 'bg-success' : 'bg-primary'}`}
+                        style={{ width: `${Math.min(100, pct)}%` }}
+                      />
+                    </div>
+                    {!isCleared && (
+                      <div className="text-xs text-base-content/40 mt-1">{Math.round(pct)}% paid</div>
+                    )}
+                  </div>
+                );
+              })}
+
+              {/* Payment history */}
+              {legacyPayments.length > 0 && (
+                <div className="pt-2 border-t border-base-300">
+                  <div className="text-xs text-base-content/50 uppercase font-semibold mb-2">Payment History</div>
+                  <div className="space-y-1">
+                    {legacyPayments.map(p => (
+                      <div key={p.id} className="flex justify-between text-xs py-1 border-b border-base-300/50 last:border-0">
+                        <span className="text-base-content/70">{formatDate(p.payment_date)}{p.notes ? ` — ${p.notes}` : ''}</span>
+                        <span className="font-semibold text-success">+{formatCurrency(p.amount)}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* ── One-Off Jobs ── */}
+      <div>
+        <h3 className="font-semibold text-sm text-base-content/60 uppercase tracking-wide mb-2">One-Off Jobs</h3>
+        <div className="space-y-2">
+          {oneOffJobs.length === 0 ? (
+            <div className="card bg-base-200">
+              <div className="card-body p-4 text-center">
+                <p className="text-sm text-base-content/60">No one-off jobs yet.</p>
+              </div>
+            </div>
+          ) : (
+            oneOffJobs.map(job => {
+              const { emoji, label, color, bg, desc } = getStatusInfo(job.invoice_status);
+              const isExpanded = expandedOneOff === job.id;
+
+              return (
+                <div key={job.id} className={`card border ${bg}`}>
+                  <div className="card-body p-3 space-y-2">
+                    <div
+                      className="flex justify-between items-start cursor-pointer"
+                      onClick={() => setExpandedOneOff(isExpanded ? null : job.id)}
+                    >
+                      <div>
+                        <div className="font-bold text-sm">{job.job_name}</div>
+                        <div className={`text-xs ${color} font-medium mt-0.5`}>
+                          {emoji} {label}
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <div className="text-right">
+                          <div className="font-bold text-sm">{formatCurrency(job.tc_amount)}</div>
+                          <div className="text-xs text-base-content/50">your cut</div>
+                        </div>
+                        {isExpanded ? <ChevronUp size={16}/> : <ChevronDown size={16}/>}
+                      </div>
+                    </div>
+
+                    {isExpanded && (
+                      <div className="pt-2 border-t border-base-content/10 space-y-2">
+                        {/* Status explanation */}
+                        <div className={`text-xs ${color} rounded p-2 bg-base-content/5`}>
+                          {desc}
+                        </div>
+
+                        {/* Details grid */}
+                        <div className="grid grid-cols-2 gap-2 text-xs">
+                          {job.dmg_invoice_number && (
+                            <div>
+                              <div className="text-base-content/50 uppercase font-semibold">Invoice #</div>
+                              <div className="font-medium">{job.dmg_invoice_number}</div>
+                            </div>
+                          )}
+                          {job.dmg_invoice_amount && (
+                            <div>
+                              <div className="text-base-content/50 uppercase font-semibold">DMG Invoice</div>
+                              <div className="font-medium">{formatCurrency(job.dmg_invoice_amount)}</div>
+                            </div>
+                          )}
+                          {job.dmg_expected_payment_date && (
+                            <div>
+                              <div className="text-base-content/50 uppercase font-semibold">DMG Pays Troken</div>
+                              <div className="font-medium">{formatDate(job.dmg_expected_payment_date)}</div>
+                            </div>
+                          )}
+                          {job.tc_payment_due_date && (
+                            <div>
+                              <div className="text-base-content/50 uppercase font-semibold">Your Pay Date</div>
+                              <div className="font-medium text-success">{formatDate(job.tc_payment_due_date)}</div>
+                            </div>
+                          )}
+                          {job.tc_payment_date && (
+                            <div>
+                              <div className="text-base-content/50 uppercase font-semibold">Paid On</div>
+                              <div className="font-medium text-success">{formatDate(job.tc_payment_date)}</div>
+                            </div>
+                          )}
+                        </div>
+
+                        {/* No invoice yet note */}
+                        {job.invoice_status === 'pending_invoice' && !job.dmg_expected_payment_date && (
+                          <div className="text-xs text-base-content/50 italic">
+                            Not yet invoiced by DMG — your 7-day payment clock starts once Troken receives payment.
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            })
+          )}
+        </div>
+      </div>
+
+      {/* ── March Contract Work ── */}
+      <div>
+        <div className="flex justify-between items-baseline mb-2">
+          <h3 className="font-semibold text-sm text-base-content/60 uppercase tracking-wide">March Contract Work</h3>
+          {contractInvoices.length > 0 && (
+            <span className="text-xs text-base-content/50">{contractInvoices.length} invoices · {formatCurrency(Math.round(contractPending))} pending</span>
+          )}
+        </div>
+        <div className="space-y-2">
+          {contractInvoices.length === 0 ? (
+            <div className="card bg-base-200 border border-dashed border-base-content/20">
+              <div className="card-body p-4 text-center">
+                <div className="text-sm text-base-content/50">No March invoices yet. As DMG invoices completed visits they'll appear here.</div>
+              </div>
+            </div>
+          ) : (
+            contractInvoices.map(inv => {
+              const { emoji, label, color, bg } = getStatusInfo(inv.invoice_status);
+              const isExpanded = expandedContract === inv.id;
+              return (
+                <div key={inv.id} className={`card border ${bg}`}>
+                  <div className="card-body p-3 space-y-1">
+                    <div
+                      className="flex justify-between items-start cursor-pointer"
+                      onClick={() => setExpandedContract(isExpanded ? null : inv.id)}
+                    >
+                      <div className="flex-1 min-w-0 pr-2">
+                        <div className="font-semibold text-sm truncate">{inv.crm_property_name ?? inv.customer}</div>
+                        <div className={`text-xs ${color} font-medium mt-0.5`}>{emoji} {label}</div>
+                      </div>
+                      <div className="flex items-center gap-2 shrink-0">
+                        <div className="text-right">
+                          <div className="font-bold text-sm">{formatCurrency(Math.round(inv.tc_amount))}</div>
+                          <div className="text-xs text-base-content/50">your cut</div>
+                        </div>
+                        {isExpanded ? <ChevronUp size={16}/> : <ChevronDown size={16}/>}
+                      </div>
+                    </div>
+                    {isExpanded && (
+                      <div className="pt-2 border-t border-base-content/10 space-y-2">
+                        <div className="grid grid-cols-2 gap-2 text-xs">
+                          {inv.dmg_invoice_number && (
+                            <div>
+                              <div className="text-base-content/50 uppercase font-semibold">Invoice #</div>
+                              <div className="font-medium">{inv.dmg_invoice_number}</div>
+                            </div>
+                          )}
+                          <div>
+                            <div className="text-base-content/50 uppercase font-semibold">DMG Invoice</div>
+                            <div className="font-medium">{formatCurrency(Math.round(inv.dmg_amount))}</div>
+                          </div>
+                          {inv.invoice_date && (
+                            <div>
+                              <div className="text-base-content/50 uppercase font-semibold">Invoice Date</div>
+                              <div className="font-medium">{formatDate(inv.invoice_date)}</div>
+                            </div>
+                          )}
+                          {inv.dmg_expected_payment_date && (
+                            <div>
+                              <div className="text-base-content/50 uppercase font-semibold">DMG Pays Troken</div>
+                              <div className="font-medium">{formatDate(inv.dmg_expected_payment_date)}</div>
+                            </div>
+                          )}
+                          {inv.tc_payment_due_date && (
+                            <div>
+                              <div className="text-base-content/50 uppercase font-semibold">Your Pay Date</div>
+                              <div className="font-medium text-success">{formatDate(inv.tc_payment_due_date)}</div>
+                            </div>
+                          )}
+                          {inv.tc_payment_date && (
+                            <div>
+                              <div className="text-base-content/50 uppercase font-semibold">Paid On</div>
+                              <div className="font-medium text-success">{formatDate(inv.tc_payment_date)}</div>
+                            </div>
+                          )}
+                        </div>
+                        {inv.dmg_billing_number && (
+                          <div className="text-xs text-base-content/40">Billing ref: {inv.dmg_billing_number}</div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            })
+          )}
+        </div>
+      </div>
+
+    </div>
+  );
+};
+
+// ─── SubDashboard Component ──────────────────────────────────────────────────
+
 interface SubDashboardProps {
   subs: Sub[];
   jobs: Job[];
@@ -90,7 +510,9 @@ export const SubDashboard: React.FC<SubDashboardProps> = ({ subs, jobs, allServi
   const sub = subs[0];
   if (!sub) return <div className="p-4">No sub assigned.</div>;
 
-  const [activeTab, setActiveTab] = useState<'properties'|'calendar'|'quotes'|'deadlines'|'pay'>('properties');
+  const [activeTab, setActiveTab] = useState<'properties'|'calendar'|'quotes'|'reqs'|'standards'|'pay'>('properties');
+  const [siteInstructions, setSiteInstructions] = useState<SiteInstruction[]>([]);
+  const [expandedInstructionClient, setExpandedInstructionClient] = useState<string|null>(null);
   const [expandedJob, setExpandedJob] = useState<number|null>(null);
   const [notes, setNotes] = useState<Record<number, Note[]>>({});
   const [newNote, setNewNote] = useState<Record<number, string>>({});
@@ -112,6 +534,14 @@ export const SubDashboard: React.FC<SubDashboardProps> = ({ subs, jobs, allServi
       `SELECT p.*, s.name as sub_name FROM pipeline_jobs p LEFT JOIN subs s ON p.sub_id = s.id WHERE p.sub_id = ${sub.id} AND p.stage = 'quote' ORDER BY p.deadline ASC`
     ).then((rows: any) => setPipelineJobs(rows));
   }, [sub.id]);
+
+  useEffect(() => {
+    db.query(`SELECT * FROM site_instructions ORDER BY client_name ASC, sort_order ASC, category ASC`)
+      .then((rows: any) => setSiteInstructions(rows.map((r: any) => ({
+        ...r,
+        instructions: Array.isArray(r.instructions) ? r.instructions : JSON.parse(r.instructions || '[]')
+      }))));
+  }, []);
 
   async function loadNotes(jobId: number) {
     const rows: any = await db.query(
@@ -144,7 +574,6 @@ export const SubDashboard: React.FC<SubDashboardProps> = ({ subs, jobs, allServi
     await db.execute(
       `UPDATE pipeline_jobs SET sub_quote_total = ${amt}, sub_quote_submitted_at = '${now}', sub_quote_notes = ${notes ? `'${notes.replace(/'/g, "''")}'` : 'NULL'}, updated_at = '${now}' WHERE id = ${pj.id}`
     );
-    // Notify via webhook
     const webhookUrl = import.meta.env.VITE_NOTIFY_WEBHOOK;
     if (webhookUrl) {
       fetch(webhookUrl, {
@@ -153,7 +582,6 @@ export const SubDashboard: React.FC<SubDashboardProps> = ({ subs, jobs, allServi
         body: JSON.stringify({ property_name: pj.property_name, amount: amt, quote_format: pj.quote_format, sub_name: sub.name }),
       }).catch(() => {/* silent */});
     }
-    // Refresh pipeline jobs
     const rows: any = await db.query(
       `SELECT p.*, s.name as sub_name FROM pipeline_jobs p LEFT JOIN subs s ON p.sub_id = s.id WHERE p.sub_id = ${sub.id} AND p.stage = 'quote' ORDER BY p.deadline ASC`
     );
@@ -180,22 +608,16 @@ export const SubDashboard: React.FC<SubDashboardProps> = ({ subs, jobs, allServi
     const now = new Date().toISOString();
     const notes = quoteNoteInputs[pj.id] ?? '';
 
-    // Delete any previous line items for this job
     await db.execute(`DELETE FROM quote_line_items WHERE pipeline_job_id = ${pj.id}`);
-
-    // Insert each line item
     for (const item of items) {
       await db.execute(
         `INSERT INTO quote_line_items (pipeline_job_id, category, description, amount) VALUES (${pj.id}, '${item.cat}', '${item.desc.replace(/'/g, "''")}', ${item.amt})`
       );
     }
-
-    // Update pipeline job
     await db.execute(
       `UPDATE pipeline_jobs SET sub_quote_total = ${total}, sub_quote_submitted_at = '${now}', sub_quote_notes = ${notes ? `'${notes.replace(/'/g, "''")}'` : 'NULL'}, updated_at = '${now}' WHERE id = ${pj.id}`
     );
 
-    // Notify via webhook
     const webhookUrl = import.meta.env.VITE_NOTIFY_WEBHOOK;
     if (webhookUrl) {
       fetch(webhookUrl, {
@@ -205,7 +627,6 @@ export const SubDashboard: React.FC<SubDashboardProps> = ({ subs, jobs, allServi
       }).catch(() => {/* silent */});
     }
 
-    // Refresh
     const rows: any = await db.query(
       `SELECT p.*, s.name as sub_name FROM pipeline_jobs p LEFT JOIN subs s ON p.sub_id = s.id WHERE p.sub_id = ${sub.id} AND p.stage = 'quote' ORDER BY p.deadline ASC`
     );
@@ -266,11 +687,14 @@ export const SubDashboard: React.FC<SubDashboardProps> = ({ subs, jobs, allServi
         <button className={`tab flex-1 ${activeTab === 'calendar' ? 'tab-active' : ''}`} onClick={() => setActiveTab('calendar')}>
           📅 Plan
         </button>
-        <button className={`tab flex-1 ${activeTab === 'deadlines' ? 'tab-active' : ''}`} onClick={() => setActiveTab('deadlines')}>
-          Due {upcoming.length > 0 && <span className="badge badge-warning badge-xs ml-1">{upcoming.length}</span>}
-        </button>
         <button className={`tab flex-1 ${activeTab === 'quotes' ? 'tab-active' : ''}`} onClick={() => setActiveTab('quotes')}>
           Quotes {pipelineJobs.length > 0 && <span className="badge badge-info badge-xs ml-1">{pipelineJobs.length}</span>}
+        </button>
+        <button className={`tab flex-1 ${activeTab === 'reqs' ? 'tab-active' : ''}`} onClick={() => setActiveTab('reqs')}>
+          Reqs {upcoming.length > 0 && <span className="badge badge-warning badge-xs ml-1">{upcoming.length}</span>}
+        </button>
+        <button className={`tab flex-1 ${activeTab === 'standards' ? 'tab-active' : ''}`} onClick={() => setActiveTab('standards')}>
+          <ClipboardList size={13} className="mr-0.5" /> SOW
         </button>
         <button className={`tab flex-1 ${activeTab === 'pay' ? 'tab-active' : ''}`} onClick={() => setActiveTab('pay')}>
           <DollarSign size={13} className="mr-0.5" /> Pay
@@ -334,7 +758,7 @@ export const SubDashboard: React.FC<SubDashboardProps> = ({ subs, jobs, allServi
                         })}
                       </div>
 
-                      {/* Notes - Shared + Contractor only */}
+                      {/* Notes */}
                       <div>
                         <h4 className="text-xs font-semibold text-base-content/60 uppercase mb-1 flex items-center gap-1">
                           <MessageSquare size={12}/> Notes
@@ -378,36 +802,171 @@ export const SubDashboard: React.FC<SubDashboardProps> = ({ subs, jobs, allServi
         />
       )}
 
-      {/* Deadlines Tab */}
-      {activeTab === 'deadlines' && (
-        <div className="card bg-base-200">
-          <div className="card-body p-4">
-            {upcoming.length === 0 ? (
-              <p className="text-sm text-base-content/60 text-center">No upcoming deadlines in the next 90 days. 🎉</p>
-            ) : (
-              <div className="space-y-2">
-                {upcoming.map((item, i) => (
-                  <div key={i} className="flex items-center justify-between p-2 bg-base-300 rounded-lg">
-                    <div>
-                      <div className="font-medium text-sm">{item.propertyName}</div>
-                      <div className="text-xs text-base-content/60">{item.serviceType}{item.scheduleDescription ? ` — ${cleanScheduleForSub(item.scheduleDescription)}` : ''}</div>
+      {/* Reqs Tab: Due Soon + Visit Schedules */}
+      {activeTab === 'reqs' && (() => {
+        const clientMap: Record<string, { jobs: typeof subJobs; services: Service[] }> = {};
+        subJobs.forEach(j => {
+          const cn = j.client_name || 'Unknown Client';
+          if (!clientMap[cn]) clientMap[cn] = { jobs: [], services: [] };
+          clientMap[cn].jobs.push(j);
+          const jobSvcs = allServices.filter(s => s.job_id === j.id);
+          clientMap[cn].services.push(...jobSvcs);
+        });
+        const clientNames = Object.keys(clientMap).sort();
+
+        function cleanScheduleDesc(desc: string | null): string {
+          if (!desc) return '';
+          return desc.replace(/\s*-\s*\$[\d,.]+\/per visit/gi, '').replace(/\s*-\s*\$[\d,.]+\/month/gi, '').trim();
+        }
+        function isRoutineSvc(svc: Service): boolean {
+          return svc.service_type.toLowerCase().includes('routine');
+        }
+        function isSeasonalSvc(svc: Service): boolean {
+          return !isRoutineSvc(svc);
+        }
+
+        return (
+          <div className="space-y-4">
+            {/* Due Soon */}
+            <div>
+              <h3 className="text-sm font-bold flex items-center gap-2 mb-2">
+                <AlertTriangle size={14} className="text-warning" /> Due Soon
+                {upcoming.length > 0 && <span className="badge badge-warning badge-sm">{upcoming.length}</span>}
+              </h3>
+              <div className="card bg-base-200">
+                <div className="card-body p-3">
+                  {upcoming.length === 0 ? (
+                    <p className="text-sm text-base-content/60 text-center">No upcoming deadlines in the next 90 days. 🎉</p>
+                  ) : (
+                    <div className="space-y-2">
+                      {upcoming.map((item, i) => (
+                        <div key={i} className="flex items-center justify-between p-2 bg-base-300 rounded-lg">
+                          <div>
+                            <div className="font-medium text-sm">{item.propertyName}</div>
+                            <div className="text-xs text-base-content/60">{item.serviceType}{item.scheduleDescription ? ` — ${cleanScheduleForSub(item.scheduleDescription)}` : ''}</div>
+                          </div>
+                          <div className="text-right">
+                            <div className={`text-sm font-medium flex items-center gap-1 ${item.daysUntil <= 14 ? 'text-error' : item.daysUntil <= 30 ? 'text-warning' : ''}`}>
+                              {item.daysUntil <= 14 && <AlertTriangle size={12}/>}
+                              {formatDate(item.deadline)}
+                            </div>
+                            <div className="text-xs text-base-content/50">
+                              {item.daysUntil === 0 ? 'Today' : item.daysUntil === 1 ? 'Tomorrow' : `${item.daysUntil} days`}
+                            </div>
+                          </div>
+                        </div>
+                      ))}
                     </div>
-                    <div className="text-right">
-                      <div className={`text-sm font-medium flex items-center gap-1 ${item.daysUntil <= 14 ? 'text-error' : item.daysUntil <= 30 ? 'text-warning' : ''}`}>
-                        {item.daysUntil <= 14 && <AlertTriangle size={12}/>}
-                        {formatDate(item.deadline)}
-                      </div>
-                      <div className="text-xs text-base-content/50">
-                        {item.daysUntil === 0 ? 'Today' : item.daysUntil === 1 ? 'Tomorrow' : `${item.daysUntil} days`}
-                      </div>
-                    </div>
-                  </div>
-                ))}
+                  )}
+                </div>
               </div>
-            )}
+            </div>
+
+            {/* Visit Schedules by Client */}
+            <div>
+              <h3 className="text-sm font-bold mb-2">📋 Visit Schedules</h3>
+              <div className="space-y-2">
+                {clientNames.map(cn => {
+                  const group = clientMap[cn];
+                  const propCount = group.jobs.length;
+                  return (
+                    <div key={cn} className="collapse collapse-arrow bg-base-200 rounded-lg">
+                      <input type="checkbox" />
+                      <div className="collapse-title font-bold text-sm flex items-center gap-2 pr-8">
+                        <span>{cn}</span>
+                        <span className="badge badge-sm badge-ghost">{propCount} {propCount === 1 ? 'site' : 'sites'}</span>
+                      </div>
+                      <div className="collapse-content space-y-3">
+                        {group.jobs
+                          .sort((a, b) => (a.property_name || '').localeCompare(b.property_name || ''))
+                          .map(j => {
+                            const jobSvcs = allServices.filter(s => s.job_id === j.id);
+                            const routineSvcs = jobSvcs.filter(isRoutineSvc);
+                            const seasonalSvcs = jobSvcs.filter(isSeasonalSvc);
+                            return (
+                              <div key={j.id} className="bg-base-300 rounded-lg p-3 space-y-2">
+                                <div>
+                                  <h4 className="font-semibold text-sm">{j.property_name}</h4>
+                                  <p className="text-xs text-base-content/60 flex items-center gap-1">
+                                    <MapPin size={10}/> {j.property_address}
+                                  </p>
+                                  {j.metro && <span className="badge badge-xs badge-outline mt-1">{j.metro}</span>}
+                                </div>
+                                {routineSvcs.length > 0 && (
+                                  <div>
+                                    <h5 className="text-xs font-semibold text-primary uppercase mb-1">📋 Visit Schedule</h5>
+                                    <div className="space-y-1">
+                                      {routineSvcs.map((s, i) => (
+                                        <div key={i} className="flex items-start justify-between bg-base-100/50 rounded px-2 py-1.5">
+                                          <span className="text-xs">{cleanScheduleDesc(s.schedule_description) || s.service_type}</span>
+                                          {s.total_visits != null && <span className="badge badge-xs badge-info ml-2">{s.total_visits} visits</span>}
+                                        </div>
+                                      ))}
+                                    </div>
+                                  </div>
+                                )}
+                                {seasonalSvcs.length > 0 && (
+                                  <div>
+                                    <h5 className="text-xs font-semibold text-secondary uppercase mb-1">🌿 Seasonal & Additional</h5>
+                                    <div className="space-y-1">
+                                      {seasonalSvcs
+                                        .sort((a, b) => {
+                                          if (a.deadline && b.deadline) return a.deadline.localeCompare(b.deadline);
+                                          if (a.deadline) return -1;
+                                          if (b.deadline) return 1;
+                                          return a.service_type.localeCompare(b.service_type);
+                                        })
+                                        .map((s, i) => {
+                                          const deadlineDate = s.deadline ? new Date(s.deadline + 'T00:00:00') : null;
+                                          const now = new Date();
+                                          const daysUntil = deadlineDate ? Math.ceil((deadlineDate.getTime() - now.getTime()) / 86400000) : null;
+                                          const isPast = daysUntil !== null && daysUntil < 0;
+                                          const isUrgent = daysUntil !== null && daysUntil >= 0 && daysUntil <= 30;
+                                          const isSoon = daysUntil !== null && daysUntil > 30 && daysUntil <= 60;
+                                          return (
+                                            <div key={i} className="flex items-start justify-between bg-base-100/50 rounded px-2 py-1.5">
+                                              <div className="flex-1">
+                                                <div className="text-xs font-medium">{s.service_type}</div>
+                                                {s.schedule_description && <div className="text-xs text-base-content/50">{cleanScheduleDesc(s.schedule_description)}</div>}
+                                              </div>
+                                              <div className="text-right ml-2 flex-shrink-0">
+                                                {deadlineDate && (
+                                                  <div className={`text-xs font-medium flex items-center gap-1 ${isPast ? 'text-error line-through' : isUrgent ? 'text-error' : isSoon ? 'text-warning' : 'text-base-content/60'}`}>
+                                                    {isUrgent && !isPast && <AlertTriangle size={10}/>}
+                                                    {deadlineDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                                                  </div>
+                                                )}
+                                                {daysUntil !== null && !isPast && (
+                                                  <div className="text-xs text-base-content/40">
+                                                    {daysUntil === 0 ? 'Today' : daysUntil === 1 ? 'Tomorrow' : `${daysUntil}d`}
+                                                  </div>
+                                                )}
+                                              </div>
+                                            </div>
+                                          );
+                                        })}
+                                    </div>
+                                  </div>
+                                )}
+                                {cn.toLowerCase().includes('lowe') && (
+                                  <div className="bg-error/10 border border-error/30 rounded px-2 py-1.5">
+                                    <div className="text-xs font-semibold text-error flex items-center gap-1">
+                                      <AlertTriangle size={10}/> HARD DEADLINE: Must be completed by Friday 11:59 PM — no Saturday makeup
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* Quotes Tab */}
       {activeTab === 'quotes' && (
@@ -452,7 +1011,6 @@ export const SubDashboard: React.FC<SubDashboardProps> = ({ subs, jobs, allServi
                           </div>
                         )}
 
-                        {/* Submitted state */}
                         {pj.sub_quote_submitted_at != null ? (
                           <div className="bg-success/10 border border-success/30 rounded p-3 space-y-1">
                             <div className="flex items-center gap-2 text-success font-semibold">
@@ -464,7 +1022,6 @@ export const SubDashboard: React.FC<SubDashboardProps> = ({ subs, jobs, allServi
                             <p className="text-xs text-base-content/50 italic">Troken LLC is reviewing your quote.</p>
                           </div>
                         ) : (
-                          /* Submission forms */
                           pj.quote_format === 'breakdown' ? (
                             <div className="space-y-3">
                               <h4 className="text-xs font-semibold text-base-content/60 uppercase">Quote Breakdown</h4>
@@ -502,7 +1059,6 @@ export const SubDashboard: React.FC<SubDashboardProps> = ({ subs, jobs, allServi
                                   </div>
                                 );
                               })}
-                              {/* Total preview */}
                               {(() => {
                                 const inputs = lineItemInputs[pj.id] ?? {};
                                 const total = ['time','material','equipment','trip_charge','miscellaneous']
@@ -531,7 +1087,6 @@ export const SubDashboard: React.FC<SubDashboardProps> = ({ subs, jobs, allServi
                               </button>
                             </div>
                           ) : (
-                            /* lump_sum or contract */
                             <div className="space-y-3">
                               <div>
                                 <label className="text-xs font-semibold text-base-content/60 uppercase">Your Price</label>
@@ -576,46 +1131,71 @@ export const SubDashboard: React.FC<SubDashboardProps> = ({ subs, jobs, allServi
           )}
         </div>
       )}
+
+      {/* Requirements Tab */}
+      {/* Standards Tab: Field SOW specs per client */}
+      {activeTab === 'standards' && (() => {
+        // Group site_instructions by client
+        const clientMap: Record<string, SiteInstruction[]> = {};
+        siteInstructions.forEach(si => {
+          if (!clientMap[si.client_name]) clientMap[si.client_name] = [];
+          clientMap[si.client_name].push(si);
+        });
+        const clientNames = Object.keys(clientMap).sort();
+
+        return (
+          <div className="space-y-3">
+            <div className="text-xs text-base-content/60 px-1">
+              Field standards and scope of work per client — grass heights, trimming specs, what's in/out of scope.
+            </div>
+            {clientNames.length === 0 ? (
+              <div className="card bg-base-200">
+                <div className="card-body p-4 text-center">
+                  <p className="text-sm text-base-content/60">No site standards on file yet.</p>
+                </div>
+              </div>
+            ) : clientNames.map(cn => {
+              const categories = clientMap[cn];
+              const isOpen = expandedInstructionClient === cn;
+              return (
+                <div key={cn} className="bg-base-200 rounded-lg overflow-hidden">
+                  <button
+                    className="w-full flex items-center justify-between px-4 py-3 font-bold text-sm text-left"
+                    onClick={() => setExpandedInstructionClient(isOpen ? null : cn)}
+                  >
+                    <span>{cn}</span>
+                    <span className="flex items-center gap-2">
+                      <span className="badge badge-ghost badge-sm">{categories.length} {categories.length === 1 ? 'section' : 'sections'}</span>
+                      {isOpen ? <ChevronUp size={14}/> : <ChevronDown size={14}/>}
+                    </span>
+                  </button>
+                  {isOpen && (
+                    <div className="px-3 pb-3 space-y-3">
+                      {categories.map(cat => (
+                        <div key={cat.id} className="bg-base-300 rounded-lg p-3">
+                          <h5 className="text-xs font-bold uppercase text-primary mb-2">{cat.category}</h5>
+                          <ul className="space-y-1.5">
+                            {cat.instructions.map((instr, idx) => (
+                              <li key={idx} className="flex items-start gap-2 text-xs text-base-content/80">
+                                <span className="text-primary mt-0.5 shrink-0">•</span>
+                                <span>{instr}</span>
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        );
+      })()}
+
       {/* Pay Tab */}
       {activeTab === 'pay' && (
-        <div className="space-y-4">
-          {/* Total Pay Card */}
-          <div className="card bg-success/10 border border-success/20">
-            <div className="card-body p-4">
-              <div className="flex items-center gap-2 text-success/80 text-sm">
-                <DollarSign size={16} /> Total Season Pay
-              </div>
-              <div className="text-3xl font-bold text-success">{formatCurrency(totalPay)}</div>
-              <div className="text-xs text-success/70">{subJobs.length} active sites</div>
-            </div>
-          </div>
-
-          {/* Per-Site Breakdown */}
-          <div>
-            <h3 className="font-semibold text-sm text-base-content/60 uppercase tracking-wide mb-2">By Site</h3>
-            <div className="space-y-2">
-              {subJobs
-                .map(job => ({ job, pay: calcJobSubCost(job.id, allServices) }))
-                .sort((a, b) => b.pay - a.pay)
-                .map(({ job, pay }) => (
-                  <div key={job.id} className="card bg-base-200">
-                    <div className="card-body p-3">
-                      <div className="flex items-center justify-between">
-                        <div>
-                          <div className="font-medium">{job.property_name}</div>
-                          <div className="text-xs text-base-content/50">{job.client_name}{job.store_number ? ` #${job.store_number}` : ''}</div>
-                        </div>
-                        <div className="text-right">
-                          <div className="font-bold text-success">{formatCurrency(pay)}</div>
-                          <div className="text-xs text-base-content/50">{job.metro ?? ''}</div>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                ))}
-            </div>
-          </div>
-        </div>
+        <PayTab subId={sub.id} subJobs={subJobs} allServices={allServices} totalPay={totalPay} isPortalMode={isPortalMode} />
       )}
     </div>
   );

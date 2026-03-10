@@ -43,6 +43,14 @@ function cleanScheduleForSub(desc: string | null): string {
   return desc.replace(/\s*-\s*\$[\d,.]+\/per visit/gi, '').trim();
 }
 
+interface SiteInstruction {
+  id: number;
+  client_name: string;
+  category: string;
+  instructions: string[];
+  sort_order: number;
+}
+
 interface UpcomingService {
   propertyName: string;
   serviceType: string;
@@ -502,7 +510,9 @@ export const SubDashboard: React.FC<SubDashboardProps> = ({ subs, jobs, allServi
   const sub = subs[0];
   if (!sub) return <div className="p-4">No sub assigned.</div>;
 
-  const [activeTab, setActiveTab] = useState<'properties'|'calendar'|'quotes'|'deadlines'|'pay'|'requirements'>('properties');
+  const [activeTab, setActiveTab] = useState<'properties'|'calendar'|'quotes'|'reqs'|'pay'>('properties');
+  const [siteInstructions, setSiteInstructions] = useState<SiteInstruction[]>([]);
+  const [expandedInstructionClient, setExpandedInstructionClient] = useState<string|null>(null);
   const [expandedJob, setExpandedJob] = useState<number|null>(null);
   const [notes, setNotes] = useState<Record<number, Note[]>>({});
   const [newNote, setNewNote] = useState<Record<number, string>>({});
@@ -524,6 +534,14 @@ export const SubDashboard: React.FC<SubDashboardProps> = ({ subs, jobs, allServi
       `SELECT p.*, s.name as sub_name FROM pipeline_jobs p LEFT JOIN subs s ON p.sub_id = s.id WHERE p.sub_id = ${sub.id} AND p.stage = 'quote' ORDER BY p.deadline ASC`
     ).then((rows: any) => setPipelineJobs(rows));
   }, [sub.id]);
+
+  useEffect(() => {
+    db.query(`SELECT * FROM site_instructions ORDER BY client_name ASC, sort_order ASC, category ASC`)
+      .then((rows: any) => setSiteInstructions(rows.map((r: any) => ({
+        ...r,
+        instructions: Array.isArray(r.instructions) ? r.instructions : JSON.parse(r.instructions || '[]')
+      }))));
+  }, []);
 
   async function loadNotes(jobId: number) {
     const rows: any = await db.query(
@@ -669,14 +687,14 @@ export const SubDashboard: React.FC<SubDashboardProps> = ({ subs, jobs, allServi
         <button className={`tab flex-1 ${activeTab === 'calendar' ? 'tab-active' : ''}`} onClick={() => setActiveTab('calendar')}>
           📅 Plan
         </button>
-        <button className={`tab flex-1 ${activeTab === 'deadlines' ? 'tab-active' : ''}`} onClick={() => setActiveTab('deadlines')}>
-          Due {upcoming.length > 0 && <span className="badge badge-warning badge-xs ml-1">{upcoming.length}</span>}
-        </button>
         <button className={`tab flex-1 ${activeTab === 'quotes' ? 'tab-active' : ''}`} onClick={() => setActiveTab('quotes')}>
           Quotes {pipelineJobs.length > 0 && <span className="badge badge-info badge-xs ml-1">{pipelineJobs.length}</span>}
         </button>
-        <button className={`tab flex-1 ${activeTab === 'requirements' ? 'tab-active' : ''}`} onClick={() => setActiveTab('requirements')}>
-          <ClipboardList size={13} className="mr-0.5" /> Reqs
+        <button className={`tab flex-1 ${activeTab === 'reqs' ? 'tab-active' : ''}`} onClick={() => setActiveTab('reqs')}>
+          Reqs {upcoming.length > 0 && <span className="badge badge-warning badge-xs ml-1">{upcoming.length}</span>}
+        </button>
+        <button className={`tab flex-1 ${activeTab === 'standards' ? 'tab-active' : ''}`} onClick={() => setActiveTab('standards')}>
+          <ClipboardList size={13} className="mr-0.5" /> SOW
         </button>
         <button className={`tab flex-1 ${activeTab === 'pay' ? 'tab-active' : ''}`} onClick={() => setActiveTab('pay')}>
           <DollarSign size={13} className="mr-0.5" /> Pay
@@ -784,36 +802,171 @@ export const SubDashboard: React.FC<SubDashboardProps> = ({ subs, jobs, allServi
         />
       )}
 
-      {/* Deadlines Tab */}
-      {activeTab === 'deadlines' && (
-        <div className="card bg-base-200">
-          <div className="card-body p-4">
-            {upcoming.length === 0 ? (
-              <p className="text-sm text-base-content/60 text-center">No upcoming deadlines in the next 90 days. 🎉</p>
-            ) : (
-              <div className="space-y-2">
-                {upcoming.map((item, i) => (
-                  <div key={i} className="flex items-center justify-between p-2 bg-base-300 rounded-lg">
-                    <div>
-                      <div className="font-medium text-sm">{item.propertyName}</div>
-                      <div className="text-xs text-base-content/60">{item.serviceType}{item.scheduleDescription ? ` — ${cleanScheduleForSub(item.scheduleDescription)}` : ''}</div>
+      {/* Reqs Tab: Due Soon + Visit Schedules */}
+      {activeTab === 'reqs' && (() => {
+        const clientMap: Record<string, { jobs: typeof subJobs; services: Service[] }> = {};
+        subJobs.forEach(j => {
+          const cn = j.client_name || 'Unknown Client';
+          if (!clientMap[cn]) clientMap[cn] = { jobs: [], services: [] };
+          clientMap[cn].jobs.push(j);
+          const jobSvcs = allServices.filter(s => s.job_id === j.id);
+          clientMap[cn].services.push(...jobSvcs);
+        });
+        const clientNames = Object.keys(clientMap).sort();
+
+        function cleanScheduleDesc(desc: string | null): string {
+          if (!desc) return '';
+          return desc.replace(/\s*-\s*\$[\d,.]+\/per visit/gi, '').replace(/\s*-\s*\$[\d,.]+\/month/gi, '').trim();
+        }
+        function isRoutineSvc(svc: Service): boolean {
+          return svc.service_type.toLowerCase().includes('routine');
+        }
+        function isSeasonalSvc(svc: Service): boolean {
+          return !isRoutineSvc(svc);
+        }
+
+        return (
+          <div className="space-y-4">
+            {/* Due Soon */}
+            <div>
+              <h3 className="text-sm font-bold flex items-center gap-2 mb-2">
+                <AlertTriangle size={14} className="text-warning" /> Due Soon
+                {upcoming.length > 0 && <span className="badge badge-warning badge-sm">{upcoming.length}</span>}
+              </h3>
+              <div className="card bg-base-200">
+                <div className="card-body p-3">
+                  {upcoming.length === 0 ? (
+                    <p className="text-sm text-base-content/60 text-center">No upcoming deadlines in the next 90 days. 🎉</p>
+                  ) : (
+                    <div className="space-y-2">
+                      {upcoming.map((item, i) => (
+                        <div key={i} className="flex items-center justify-between p-2 bg-base-300 rounded-lg">
+                          <div>
+                            <div className="font-medium text-sm">{item.propertyName}</div>
+                            <div className="text-xs text-base-content/60">{item.serviceType}{item.scheduleDescription ? ` — ${cleanScheduleForSub(item.scheduleDescription)}` : ''}</div>
+                          </div>
+                          <div className="text-right">
+                            <div className={`text-sm font-medium flex items-center gap-1 ${item.daysUntil <= 14 ? 'text-error' : item.daysUntil <= 30 ? 'text-warning' : ''}`}>
+                              {item.daysUntil <= 14 && <AlertTriangle size={12}/>}
+                              {formatDate(item.deadline)}
+                            </div>
+                            <div className="text-xs text-base-content/50">
+                              {item.daysUntil === 0 ? 'Today' : item.daysUntil === 1 ? 'Tomorrow' : `${item.daysUntil} days`}
+                            </div>
+                          </div>
+                        </div>
+                      ))}
                     </div>
-                    <div className="text-right">
-                      <div className={`text-sm font-medium flex items-center gap-1 ${item.daysUntil <= 14 ? 'text-error' : item.daysUntil <= 30 ? 'text-warning' : ''}`}>
-                        {item.daysUntil <= 14 && <AlertTriangle size={12}/>}
-                        {formatDate(item.deadline)}
-                      </div>
-                      <div className="text-xs text-base-content/50">
-                        {item.daysUntil === 0 ? 'Today' : item.daysUntil === 1 ? 'Tomorrow' : `${item.daysUntil} days`}
-                      </div>
-                    </div>
-                  </div>
-                ))}
+                  )}
+                </div>
               </div>
-            )}
+            </div>
+
+            {/* Visit Schedules by Client */}
+            <div>
+              <h3 className="text-sm font-bold mb-2">📋 Visit Schedules</h3>
+              <div className="space-y-2">
+                {clientNames.map(cn => {
+                  const group = clientMap[cn];
+                  const propCount = group.jobs.length;
+                  return (
+                    <div key={cn} className="collapse collapse-arrow bg-base-200 rounded-lg">
+                      <input type="checkbox" />
+                      <div className="collapse-title font-bold text-sm flex items-center gap-2 pr-8">
+                        <span>{cn}</span>
+                        <span className="badge badge-sm badge-ghost">{propCount} {propCount === 1 ? 'site' : 'sites'}</span>
+                      </div>
+                      <div className="collapse-content space-y-3">
+                        {group.jobs
+                          .sort((a, b) => (a.property_name || '').localeCompare(b.property_name || ''))
+                          .map(j => {
+                            const jobSvcs = allServices.filter(s => s.job_id === j.id);
+                            const routineSvcs = jobSvcs.filter(isRoutineSvc);
+                            const seasonalSvcs = jobSvcs.filter(isSeasonalSvc);
+                            return (
+                              <div key={j.id} className="bg-base-300 rounded-lg p-3 space-y-2">
+                                <div>
+                                  <h4 className="font-semibold text-sm">{j.property_name}</h4>
+                                  <p className="text-xs text-base-content/60 flex items-center gap-1">
+                                    <MapPin size={10}/> {j.property_address}
+                                  </p>
+                                  {j.metro && <span className="badge badge-xs badge-outline mt-1">{j.metro}</span>}
+                                </div>
+                                {routineSvcs.length > 0 && (
+                                  <div>
+                                    <h5 className="text-xs font-semibold text-primary uppercase mb-1">📋 Visit Schedule</h5>
+                                    <div className="space-y-1">
+                                      {routineSvcs.map((s, i) => (
+                                        <div key={i} className="flex items-start justify-between bg-base-100/50 rounded px-2 py-1.5">
+                                          <span className="text-xs">{cleanScheduleDesc(s.schedule_description) || s.service_type}</span>
+                                          {s.total_visits != null && <span className="badge badge-xs badge-info ml-2">{s.total_visits} visits</span>}
+                                        </div>
+                                      ))}
+                                    </div>
+                                  </div>
+                                )}
+                                {seasonalSvcs.length > 0 && (
+                                  <div>
+                                    <h5 className="text-xs font-semibold text-secondary uppercase mb-1">🌿 Seasonal & Additional</h5>
+                                    <div className="space-y-1">
+                                      {seasonalSvcs
+                                        .sort((a, b) => {
+                                          if (a.deadline && b.deadline) return a.deadline.localeCompare(b.deadline);
+                                          if (a.deadline) return -1;
+                                          if (b.deadline) return 1;
+                                          return a.service_type.localeCompare(b.service_type);
+                                        })
+                                        .map((s, i) => {
+                                          const deadlineDate = s.deadline ? new Date(s.deadline + 'T00:00:00') : null;
+                                          const now = new Date();
+                                          const daysUntil = deadlineDate ? Math.ceil((deadlineDate.getTime() - now.getTime()) / 86400000) : null;
+                                          const isPast = daysUntil !== null && daysUntil < 0;
+                                          const isUrgent = daysUntil !== null && daysUntil >= 0 && daysUntil <= 30;
+                                          const isSoon = daysUntil !== null && daysUntil > 30 && daysUntil <= 60;
+                                          return (
+                                            <div key={i} className="flex items-start justify-between bg-base-100/50 rounded px-2 py-1.5">
+                                              <div className="flex-1">
+                                                <div className="text-xs font-medium">{s.service_type}</div>
+                                                {s.schedule_description && <div className="text-xs text-base-content/50">{cleanScheduleDesc(s.schedule_description)}</div>}
+                                              </div>
+                                              <div className="text-right ml-2 flex-shrink-0">
+                                                {deadlineDate && (
+                                                  <div className={`text-xs font-medium flex items-center gap-1 ${isPast ? 'text-error line-through' : isUrgent ? 'text-error' : isSoon ? 'text-warning' : 'text-base-content/60'}`}>
+                                                    {isUrgent && !isPast && <AlertTriangle size={10}/>}
+                                                    {deadlineDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                                                  </div>
+                                                )}
+                                                {daysUntil !== null && !isPast && (
+                                                  <div className="text-xs text-base-content/40">
+                                                    {daysUntil === 0 ? 'Today' : daysUntil === 1 ? 'Tomorrow' : `${daysUntil}d`}
+                                                  </div>
+                                                )}
+                                              </div>
+                                            </div>
+                                          );
+                                        })}
+                                    </div>
+                                  </div>
+                                )}
+                                {cn.toLowerCase().includes('lowe') && (
+                                  <div className="bg-error/10 border border-error/30 rounded px-2 py-1.5">
+                                    <div className="text-xs font-semibold text-error flex items-center gap-1">
+                                      <AlertTriangle size={10}/> HARD DEADLINE: Must be completed by Friday 11:59 PM — no Saturday makeup
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* Quotes Tab */}
       {activeTab === 'quotes' && (
@@ -980,140 +1133,59 @@ export const SubDashboard: React.FC<SubDashboardProps> = ({ subs, jobs, allServi
       )}
 
       {/* Requirements Tab */}
-      {activeTab === 'requirements' && (() => {
-        const clientMap: Record<string, { jobs: typeof subJobs; services: Service[] }> = {};
-        subJobs.forEach(j => {
-          const cn = j.client_name || 'Unknown Client';
-          if (!clientMap[cn]) clientMap[cn] = { jobs: [], services: [] };
-          clientMap[cn].jobs.push(j);
-          const jobSvcs = allServices.filter(s => s.job_id === j.id);
-          clientMap[cn].services.push(...jobSvcs);
+      {/* Standards Tab: Field SOW specs per client */}
+      {activeTab === 'standards' && (() => {
+        // Group site_instructions by client
+        const clientMap: Record<string, SiteInstruction[]> = {};
+        siteInstructions.forEach(si => {
+          if (!clientMap[si.client_name]) clientMap[si.client_name] = [];
+          clientMap[si.client_name].push(si);
         });
         const clientNames = Object.keys(clientMap).sort();
-
-        function cleanScheduleDesc(desc: string | null): string {
-          if (!desc) return '';
-          return desc.replace(/\s*-\s*\$[\d,.]+\/per visit/gi, '').replace(/\s*-\s*\$[\d,.]+\/month/gi, '').trim();
-        }
-
-        function isRoutine(svc: Service): boolean {
-          return svc.service_type.toLowerCase().includes('routine');
-        }
-        function isSeasonal(svc: Service): boolean {
-          return !isRoutine(svc);
-        }
 
         return (
           <div className="space-y-3">
             <div className="text-xs text-base-content/60 px-1">
-              Site requirements by client — visit schedules, seasonal services, and deadlines.
+              Field standards and scope of work per client — grass heights, trimming specs, what's in/out of scope.
             </div>
-            {clientNames.map(cn => {
-              const group = clientMap[cn];
-              const propCount = group.jobs.length;
+            {clientNames.length === 0 ? (
+              <div className="card bg-base-200">
+                <div className="card-body p-4 text-center">
+                  <p className="text-sm text-base-content/60">No site standards on file yet.</p>
+                </div>
+              </div>
+            ) : clientNames.map(cn => {
+              const categories = clientMap[cn];
+              const isOpen = expandedInstructionClient === cn;
               return (
-                <div key={cn} className="collapse collapse-arrow bg-base-200 rounded-lg">
-                  <input type="checkbox" />
-                  <div className="collapse-title font-bold text-sm flex items-center gap-2 pr-8">
+                <div key={cn} className="bg-base-200 rounded-lg overflow-hidden">
+                  <button
+                    className="w-full flex items-center justify-between px-4 py-3 font-bold text-sm text-left"
+                    onClick={() => setExpandedInstructionClient(isOpen ? null : cn)}
+                  >
                     <span>{cn}</span>
-                    <span className="badge badge-sm badge-ghost">{propCount} {propCount === 1 ? 'site' : 'sites'}</span>
-                  </div>
-                  <div className="collapse-content space-y-3">
-                    {group.jobs
-                      .sort((a, b) => (a.property_name || '').localeCompare(b.property_name || ''))
-                      .map(j => {
-                        const jobSvcs = allServices.filter(s => s.job_id === j.id);
-                        const routineSvcs = jobSvcs.filter(isRoutine);
-                        const seasonalSvcs = jobSvcs.filter(isSeasonal);
-
-                        return (
-                          <div key={j.id} className="bg-base-300 rounded-lg p-3 space-y-2">
-                            <div>
-                              <h4 className="font-semibold text-sm">{j.property_name}</h4>
-                              <p className="text-xs text-base-content/60 flex items-center gap-1">
-                                <MapPin size={10}/> {j.property_address}
-                              </p>
-                              {j.metro && (
-                                <span className="badge badge-xs badge-outline mt-1">{j.metro}</span>
-                              )}
-                            </div>
-
-                            {routineSvcs.length > 0 && (
-                              <div>
-                                <h5 className="text-xs font-semibold text-primary uppercase mb-1">📋 Visit Schedule</h5>
-                                <div className="space-y-1">
-                                  {routineSvcs.map((s, i) => (
-                                    <div key={i} className="flex items-start justify-between bg-base-100/50 rounded px-2 py-1.5">
-                                      <div className="flex-1">
-                                        <span className="text-xs">{cleanScheduleDesc(s.schedule_description) || s.service_type}</span>
-                                      </div>
-                                      {s.total_visits != null && (
-                                        <span className="badge badge-xs badge-info ml-2">{s.total_visits} visits</span>
-                                      )}
-                                    </div>
-                                  ))}
-                                </div>
-                              </div>
-                            )}
-
-                            {seasonalSvcs.length > 0 && (
-                              <div>
-                                <h5 className="text-xs font-semibold text-secondary uppercase mb-1">🌿 Seasonal & Additional Services</h5>
-                                <div className="space-y-1">
-                                  {seasonalSvcs
-                                    .sort((a, b) => {
-                                      if (a.deadline && b.deadline) return a.deadline.localeCompare(b.deadline);
-                                      if (a.deadline) return -1;
-                                      if (b.deadline) return 1;
-                                      return a.service_type.localeCompare(b.service_type);
-                                    })
-                                    .map((s, i) => {
-                                      const deadlineDate = s.deadline ? new Date(s.deadline + 'T00:00:00') : null;
-                                      const now = new Date();
-                                      const daysUntil = deadlineDate ? Math.ceil((deadlineDate.getTime() - now.getTime()) / 86400000) : null;
-                                      const isPast = daysUntil !== null && daysUntil < 0;
-                                      const isUrgent = daysUntil !== null && daysUntil >= 0 && daysUntil <= 30;
-                                      const isSoon = daysUntil !== null && daysUntil > 30 && daysUntil <= 60;
-
-                                      return (
-                                        <div key={i} className="flex items-start justify-between bg-base-100/50 rounded px-2 py-1.5">
-                                          <div className="flex-1">
-                                            <div className="text-xs font-medium">{s.service_type}</div>
-                                            {s.schedule_description && (
-                                              <div className="text-xs text-base-content/50">{cleanScheduleDesc(s.schedule_description)}</div>
-                                            )}
-                                          </div>
-                                          <div className="text-right ml-2 flex-shrink-0">
-                                            {deadlineDate && (
-                                              <div className={`text-xs font-medium flex items-center gap-1 ${isPast ? 'text-error line-through' : isUrgent ? 'text-error' : isSoon ? 'text-warning' : 'text-base-content/60'}`}>
-                                                {isUrgent && !isPast && <AlertTriangle size={10}/>}
-                                                {deadlineDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
-                                              </div>
-                                            )}
-                                            {daysUntil !== null && !isPast && (
-                                              <div className="text-xs text-base-content/40">
-                                                {daysUntil === 0 ? 'Today' : daysUntil === 1 ? 'Tomorrow' : `${daysUntil}d`}
-                                              </div>
-                                            )}
-                                          </div>
-                                        </div>
-                                      );
-                                    })}
-                                </div>
-                              </div>
-                            )}
-
-                            {cn.toLowerCase().includes("lowe") && (
-                              <div className="bg-error/10 border border-error/30 rounded px-2 py-1.5">
-                                <div className="text-xs font-semibold text-error flex items-center gap-1">
-                                  <AlertTriangle size={10}/> HARD DEADLINE: Must be completed by Friday 11:59 PM — no Saturday makeup
-                                </div>
-                              </div>
-                            )}
-                          </div>
-                        );
-                      })}
-                  </div>
+                    <span className="flex items-center gap-2">
+                      <span className="badge badge-ghost badge-sm">{categories.length} {categories.length === 1 ? 'section' : 'sections'}</span>
+                      {isOpen ? <ChevronUp size={14}/> : <ChevronDown size={14}/>}
+                    </span>
+                  </button>
+                  {isOpen && (
+                    <div className="px-3 pb-3 space-y-3">
+                      {categories.map(cat => (
+                        <div key={cat.id} className="bg-base-300 rounded-lg p-3">
+                          <h5 className="text-xs font-bold uppercase text-primary mb-2">{cat.category}</h5>
+                          <ul className="space-y-1.5">
+                            {cat.instructions.map((instr, idx) => (
+                              <li key={idx} className="flex items-start gap-2 text-xs text-base-content/80">
+                                <span className="text-primary mt-0.5 shrink-0">•</span>
+                                <span>{instr}</span>
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               );
             })}

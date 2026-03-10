@@ -339,7 +339,6 @@ const PayTab: React.FC<PayTabProps> = ({ subId }) => {
                       <div className="flex items-center gap-2">
                         <div className="text-right">
                           <div className="font-bold text-sm">{formatCurrency(job.tc_amount)}</div>
-                          <div className="text-xs text-base-content/50">your cut</div>
                         </div>
                         {isExpanded ? <ChevronUp size={16}/> : <ChevronDown size={16}/>}
                       </div>
@@ -360,18 +359,7 @@ const PayTab: React.FC<PayTabProps> = ({ subId }) => {
                               <div className="font-medium">{job.dmg_invoice_number}</div>
                             </div>
                           )}
-                          {job.dmg_invoice_amount && (
-                            <div>
-                              <div className="text-base-content/50 uppercase font-semibold">DMG Invoice</div>
-                              <div className="font-medium">{formatCurrency(job.dmg_invoice_amount)}</div>
-                            </div>
-                          )}
-                          {job.dmg_expected_payment_date && (
-                            <div>
-                              <div className="text-base-content/50 uppercase font-semibold">DMG Pays Troken</div>
-                              <div className="font-medium">{formatDate(job.dmg_expected_payment_date)}</div>
-                            </div>
-                          )}
+
                           {job.tc_payment_due_date && (
                             <div>
                               <div className="text-base-content/50 uppercase font-semibold">Your Pay Date</div>
@@ -435,7 +423,6 @@ const PayTab: React.FC<PayTabProps> = ({ subId }) => {
                       <div className="flex items-center gap-2 shrink-0">
                         <div className="text-right">
                           <div className="font-bold text-sm">{formatCurrency(Math.round(inv.tc_amount))}</div>
-                          <div className="text-xs text-base-content/50">your cut</div>
                         </div>
                         {isExpanded ? <ChevronUp size={16}/> : <ChevronDown size={16}/>}
                       </div>
@@ -449,20 +436,10 @@ const PayTab: React.FC<PayTabProps> = ({ subId }) => {
                               <div className="font-medium">{inv.dmg_invoice_number}</div>
                             </div>
                           )}
-                          <div>
-                            <div className="text-base-content/50 uppercase font-semibold">DMG Invoice</div>
-                            <div className="font-medium">{formatCurrency(Math.round(inv.dmg_amount))}</div>
-                          </div>
                           {inv.invoice_date && (
                             <div>
                               <div className="text-base-content/50 uppercase font-semibold">Invoice Date</div>
                               <div className="font-medium">{formatDate(inv.invoice_date)}</div>
-                            </div>
-                          )}
-                          {inv.dmg_expected_payment_date && (
-                            <div>
-                              <div className="text-base-content/50 uppercase font-semibold">DMG Pays Troken</div>
-                              <div className="font-medium">{formatDate(inv.dmg_expected_payment_date)}</div>
                             </div>
                           )}
                           {inv.tc_payment_due_date && (

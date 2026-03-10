@@ -101,6 +101,22 @@ interface LegacyPaymentRecord {
   notes: string | null;
 }
 
+interface ContractInvoice {
+  id: number;
+  job_id: number | null;
+  crm_property_name: string | null;
+  customer: string;
+  dmg_invoice_number: string | null;
+  dmg_billing_number: string | null;
+  invoice_date: string | null;
+  dmg_expected_payment_date: string | null;
+  dmg_amount: number;
+  tc_amount: number;
+  invoice_status: 'pending_invoice' | 'pending_payment' | 'paid';
+  tc_payment_due_date: string | null;
+  tc_payment_date: string | null;
+}
+
 const CATEGORY_LABELS: Record<string, string> = {
   jan_landscape: 'January Landscape',
   feb_landscape: 'February Landscape',
@@ -134,9 +150,11 @@ const PayTab: React.FC<PayTabProps> = ({ subId }) => {
   const [legacy, setLegacy] = useState<LegacyCategory[]>([]);
   const [oneOffJobs, setOneOffJobs] = useState<OneOffJob[]>([]);
   const [legacyPayments, setLegacyPayments] = useState<LegacyPaymentRecord[]>([]);
+  const [contractInvoices, setContractInvoices] = useState<ContractInvoice[]>([]);
   const [loading, setLoading] = useState(true);
   const [expandedOneOff, setExpandedOneOff] = useState<number | null>(null);
   const [expandedLegacy, setExpandedLegacy] = useState(false);
+  const [expandedContract, setExpandedContract] = useState<number | null>(null);
 
   useEffect(() => {
     loadData();
@@ -145,14 +163,16 @@ const PayTab: React.FC<PayTabProps> = ({ subId }) => {
   async function loadData() {
     setLoading(true);
     try {
-      const [legacyRows, oneOffRows, paymentRows] = await Promise.all([
+      const [legacyRows, oneOffRows, paymentRows, contractRows] = await Promise.all([
         db.query(`SELECT * FROM legacy_balance WHERE sub_id = ${subId} ORDER BY CASE category WHEN 'jan_landscape' THEN 1 WHEN 'feb_landscape' THEN 2 WHEN 'snow' THEN 3 END`),
         db.query(`SELECT * FROM one_off_jobs WHERE sub_id = ${subId} ORDER BY created_at ASC`),
         db.query(`SELECT * FROM legacy_payments WHERE sub_id = ${subId} ORDER BY payment_date DESC`),
+        db.query(`SELECT * FROM contract_invoices WHERE sub_id = ${subId} ORDER BY invoice_date DESC`),
       ]);
       setLegacy(legacyRows as LegacyCategory[]);
       setOneOffJobs(oneOffRows as OneOffJob[]);
       setLegacyPayments(paymentRows as LegacyPaymentRecord[]);
+      setContractInvoices(contractRows as ContractInvoice[]);
     } catch (err) {
       console.error('Failed to load pay data:', err);
     } finally {
@@ -171,7 +191,8 @@ const PayTab: React.FC<PayTabProps> = ({ subId }) => {
   // Calculate totals
   const legacyRemaining = legacy.reduce((s, c) => s + (c.original_amount - c.paid_amount), 0);
   const oneOffPending = oneOffJobs.filter(j => j.invoice_status !== 'paid').reduce((s, j) => s + j.tc_amount, 0);
-  const totalOwed = legacyRemaining + oneOffPending;
+  const contractPending = contractInvoices.filter(i => i.invoice_status !== 'paid').reduce((s, i) => s + i.tc_amount, 0);
+  const totalOwed = legacyRemaining + oneOffPending + contractPending;
 
   // Sort categories in FIFO order
   const sortedLegacy = [...legacy].sort((a, b) =>
@@ -190,7 +211,7 @@ const PayTab: React.FC<PayTabProps> = ({ subId }) => {
           <div className="text-xs text-base-content/60 uppercase tracking-wide font-semibold mb-1">Total Owed to You</div>
           <div className="text-4xl font-bold">{formatCurrency(Math.round(totalOwed))}</div>
           <div className="text-xs text-base-content/50 mt-1">
-            {formatCurrency(Math.round(legacyRemaining))} prior work + {formatCurrency(Math.round(oneOffPending))} one-off jobs
+            {formatCurrency(Math.round(legacyRemaining))} prior work · {formatCurrency(Math.round(oneOffPending))} one-off · {formatCurrency(Math.round(contractPending))} March contract
           </div>
         </div>
       </div>
@@ -373,13 +394,92 @@ const PayTab: React.FC<PayTabProps> = ({ subId }) => {
         </div>
       </div>
 
-      {/* ── March Forward (Contract Pipeline) ── */}
-      <div className="card bg-base-200 border border-dashed border-base-content/20">
-        <div className="card-body p-4 text-center">
-          <div className="text-sm font-semibold text-base-content/60">📋 March Contract Work</div>
-          <div className="text-xs text-base-content/40 mt-1">
-            Invoice matching starts March 1. As DMG invoices your completed visits, they'll appear here with payment timelines.
-          </div>
+      {/* ── March Contract Work ── */}
+      <div>
+        <div className="flex justify-between items-baseline mb-2">
+          <h3 className="font-semibold text-sm text-base-content/60 uppercase tracking-wide">March Contract Work</h3>
+          {contractInvoices.length > 0 && (
+            <span className="text-xs text-base-content/50">{contractInvoices.length} invoices · {formatCurrency(Math.round(contractPending))} pending</span>
+          )}
+        </div>
+        <div className="space-y-2">
+          {contractInvoices.length === 0 ? (
+            <div className="card bg-base-200 border border-dashed border-base-content/20">
+              <div className="card-body p-4 text-center">
+                <div className="text-sm text-base-content/50">No March invoices yet. As DMG invoices completed visits they'll appear here.</div>
+              </div>
+            </div>
+          ) : (
+            contractInvoices.map(inv => {
+              const { emoji, label, color, bg } = getStatusInfo(inv.invoice_status);
+              const isExpanded = expandedContract === inv.id;
+              return (
+                <div key={inv.id} className={`card border ${bg}`}>
+                  <div className="card-body p-3 space-y-1">
+                    <div
+                      className="flex justify-between items-start cursor-pointer"
+                      onClick={() => setExpandedContract(isExpanded ? null : inv.id)}
+                    >
+                      <div className="flex-1 min-w-0 pr-2">
+                        <div className="font-semibold text-sm truncate">{inv.crm_property_name ?? inv.customer}</div>
+                        <div className={`text-xs ${color} font-medium mt-0.5`}>{emoji} {label}</div>
+                      </div>
+                      <div className="flex items-center gap-2 shrink-0">
+                        <div className="text-right">
+                          <div className="font-bold text-sm">{formatCurrency(Math.round(inv.tc_amount))}</div>
+                          <div className="text-xs text-base-content/50">your cut</div>
+                        </div>
+                        {isExpanded ? <ChevronUp size={16}/> : <ChevronDown size={16}/>}
+                      </div>
+                    </div>
+                    {isExpanded && (
+                      <div className="pt-2 border-t border-base-content/10 space-y-2">
+                        <div className="grid grid-cols-2 gap-2 text-xs">
+                          {inv.dmg_invoice_number && (
+                            <div>
+                              <div className="text-base-content/50 uppercase font-semibold">Invoice #</div>
+                              <div className="font-medium">{inv.dmg_invoice_number}</div>
+                            </div>
+                          )}
+                          <div>
+                            <div className="text-base-content/50 uppercase font-semibold">DMG Invoice</div>
+                            <div className="font-medium">{formatCurrency(Math.round(inv.dmg_amount))}</div>
+                          </div>
+                          {inv.invoice_date && (
+                            <div>
+                              <div className="text-base-content/50 uppercase font-semibold">Invoice Date</div>
+                              <div className="font-medium">{formatDate(inv.invoice_date)}</div>
+                            </div>
+                          )}
+                          {inv.dmg_expected_payment_date && (
+                            <div>
+                              <div className="text-base-content/50 uppercase font-semibold">DMG Pays Troken</div>
+                              <div className="font-medium">{formatDate(inv.dmg_expected_payment_date)}</div>
+                            </div>
+                          )}
+                          {inv.tc_payment_due_date && (
+                            <div>
+                              <div className="text-base-content/50 uppercase font-semibold">Your Pay Date</div>
+                              <div className="font-medium text-success">{formatDate(inv.tc_payment_due_date)}</div>
+                            </div>
+                          )}
+                          {inv.tc_payment_date && (
+                            <div>
+                              <div className="text-base-content/50 uppercase font-semibold">Paid On</div>
+                              <div className="font-medium text-success">{formatDate(inv.tc_payment_date)}</div>
+                            </div>
+                          )}
+                        </div>
+                        {inv.dmg_billing_number && (
+                          <div className="text-xs text-base-content/40">Billing ref: {inv.dmg_billing_number}</div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            })
+          )}
         </div>
       </div>
 

@@ -53,6 +53,10 @@ export const Dashboard: React.FC<DashboardProps> = ({
   const [contractInvs, setContractInvs] = useState<any[]>([]);
   const [pipelineJobs, setPipelineJobs] = useState<any[]>([]);
   const [dashLoading, setDashLoading] = useState(true);
+  const [pendingReviewInvs, setPendingReviewInvs] = useState<any[]>([]);
+  const [reviewQueueItems, setReviewQueueItems] = useState<any[]>([]);
+  const [showReviewPanel, setShowReviewPanel] = useState(false);
+  const [reviewActionLoading, setReviewActionLoading] = useState<number | null>(null);
 
   useEffect(() => {
     if (demoMode) return;
@@ -69,12 +73,12 @@ export const Dashboard: React.FC<DashboardProps> = ({
         setLegacyRows(legacy);
 
         const oneOffs = await db.query(
-          `SELECT job_name, tc_amount, stage FROM one_off_jobs WHERE stage != 'paid'`
+          `SELECT job_name, tc_amount, invoice_status FROM one_off_jobs WHERE invoice_status != 'paid'`
         );
         setOneOffJobs(oneOffs);
 
         const cInvs = await db.query(
-          `SELECT tc_amount, stage FROM contract_invoices WHERE stage != 'paid'`
+          `SELECT tc_amount, invoice_status FROM contract_invoices WHERE invoice_status != 'paid' AND review_status = 'approved'`
         );
         setContractInvs(cInvs);
 
@@ -82,6 +86,23 @@ export const Dashboard: React.FC<DashboardProps> = ({
           `SELECT id, property_name, stage, sub_quote_total, deadline FROM pipeline_jobs ORDER BY created_at DESC`
         );
         setPipelineJobs(pipeline);
+
+        const pendingRevInvs = await db.query(
+          `SELECT id, crm_property_name, customer, dmg_invoice_number, invoice_date,
+                  dmg_amount, tc_amount, dmg_expected_payment_date
+           FROM contract_invoices
+           WHERE review_status = 'pending_review'
+           ORDER BY invoice_date DESC`
+        );
+        setPendingReviewInvs(pendingRevInvs);
+
+        const rQueue = await db.query(
+          `SELECT id, dmg_invoice_number, customer, dmg_amount, invoice_date, flag_reason, match_candidates
+           FROM dmg_invoice_review_queue
+           WHERE review_status = 'pending'
+           ORDER BY created_at DESC`
+        );
+        setReviewQueueItems(rQueue);
       } catch (e) {
         console.error('Dashboard data fetch error:', e);
       } finally {
@@ -135,6 +156,49 @@ export const Dashboard: React.FC<DashboardProps> = ({
     const d = new Date(s.deadline + 'T00:00:00');
     return d >= now && d <= in14;
   });
+
+  const totalReviewPending = pendingReviewInvs.length + reviewQueueItems.length;
+
+  const handleApproveInvoice = async (invoiceId: number) => {
+    setReviewActionLoading(invoiceId);
+    try {
+      await db.query(
+        `UPDATE contract_invoices SET review_status = 'approved' WHERE id = ` + invoiceId
+      );
+      setPendingReviewInvs(prev => prev.filter(i => i.id !== invoiceId));
+      // Refresh contractInvs count
+      const cInvs = await db.query(
+        `SELECT tc_amount, invoice_status FROM contract_invoices WHERE invoice_status != 'paid' AND review_status = 'approved'`
+      );
+      setContractInvs(cInvs);
+    } finally {
+      setReviewActionLoading(null);
+    }
+  };
+
+  const handleRejectInvoice = async (invoiceId: number) => {
+    setReviewActionLoading(invoiceId);
+    try {
+      await db.query(
+        `UPDATE contract_invoices SET review_status = 'flagged' WHERE id = ` + invoiceId
+      );
+      setPendingReviewInvs(prev => prev.filter(i => i.id !== invoiceId));
+    } finally {
+      setReviewActionLoading(null);
+    }
+  };
+
+  const handleIgnoreQueueItem = async (itemId: number) => {
+    setReviewActionLoading(itemId);
+    try {
+      await db.query(
+        `UPDATE dmg_invoice_review_queue SET review_status = 'ignored' WHERE id = ` + itemId
+      );
+      setReviewQueueItems(prev => prev.filter(i => i.id !== itemId));
+    } finally {
+      setReviewActionLoading(null);
+    }
+  };
 
   const landscapingJobs = jobs.filter(j => j.status === 'active' && j.contract_type === 'landscaping');
   const snowJobs = jobs.filter(j => j.status === 'active' && j.contract_type === 'snow');
@@ -234,12 +298,21 @@ export const Dashboard: React.FC<DashboardProps> = ({
               </div>
 
               {/* Alert Strip */}
-              {(quotesWaiting.length > 0 || servicesDueSoon.length > 0 || expiringContracts.length > 0) && (
+              {(quotesWaiting.length > 0 || servicesDueSoon.length > 0 || expiringContracts.length > 0 || totalReviewPending > 0) && (
                 <div className="card bg-base-200">
                   <div className="card-body p-3 space-y-2">
                     <h3 className="text-xs font-bold uppercase text-base-content/60 flex items-center gap-1">
                       <AlertTriangle size={12} className="text-warning" /> Action Needed
                     </h3>
+                    {totalReviewPending > 0 && (
+                      <button
+                        className="w-full flex items-center justify-between p-2 bg-info/10 rounded-lg text-left"
+                        onClick={() => setShowReviewPanel(v => !v)}
+                      >
+                        <span className="text-sm">📋 {totalReviewPending} invoice{totalReviewPending !== 1 ? 's' : ''} need your review before TC sees them</span>
+                        <ChevronRight size={14} className={`text-base-content/40 transition-transform ${showReviewPanel ? 'rotate-90' : ''}`} />
+                      </button>
+                    )}
                     {quotesWaiting.length > 0 && (
                       <button
                         className="w-full flex items-center justify-between p-2 bg-warning/10 rounded-lg text-left"
@@ -263,6 +336,90 @@ export const Dashboard: React.FC<DashboardProps> = ({
                           ))}
                         </div>
                       </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* Invoice Review Panel */}
+              {showReviewPanel && !demoMode && (
+                <div className="card bg-base-200">
+                  <div className="card-body p-3 space-y-3">
+                    <h3 className="text-xs font-bold uppercase text-base-content/60">📋 Invoice Review Queue</h3>
+                    <p className="text-xs text-base-content/50">Approve to push to TC's payment page. Reject to flag for manual review.</p>
+
+                    {/* Confident matches pending approval */}
+                    {pendingReviewInvs.length > 0 && (
+                      <div className="space-y-2">
+                        <div className="text-xs font-semibold text-success">✅ Matched — Ready to Approve</div>
+                        {pendingReviewInvs.map((inv: any) => (
+                          <div key={inv.id} className="bg-base-100 rounded-lg p-3 space-y-1">
+                            <div className="flex items-center justify-between">
+                              <span className="text-sm font-medium">{inv.crm_property_name || inv.customer}</span>
+                              <span className="font-bold text-success">${Math.round(parseFloat(inv.tc_amount))} to TC</span>
+                            </div>
+                            <div className="text-xs text-base-content/50">
+                              {inv.dmg_invoice_number} · {inv.invoice_date ? inv.invoice_date.slice(0,10) : ''} · DMG ${Math.round(parseFloat(inv.dmg_amount))}
+                            </div>
+                            {inv.dmg_expected_payment_date && (
+                              <div className="text-xs text-base-content/50">Expected: {inv.dmg_expected_payment_date.slice(0,10)}</div>
+                            )}
+                            <div className="flex gap-2 mt-2">
+                              <button
+                                className="btn btn-xs btn-success flex-1"
+                                disabled={reviewActionLoading === inv.id}
+                                onClick={() => handleApproveInvoice(inv.id)}
+                              >
+                                {reviewActionLoading === inv.id ? <span className="loading loading-spinner loading-xs" /> : '✓ Approve'}
+                              </button>
+                              <button
+                                className="btn btn-xs btn-ghost flex-1"
+                                disabled={reviewActionLoading === inv.id}
+                                onClick={() => handleRejectInvoice(inv.id)}
+                              >
+                                ✗ Reject
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    {/* Flagged / ambiguous items */}
+                    {reviewQueueItems.length > 0 && (
+                      <div className="space-y-2">
+                        <div className="text-xs font-semibold text-warning">⚠️ Needs Manual Match</div>
+                        {reviewQueueItems.map((item: any) => (
+                          <div key={item.id} className="bg-base-100 rounded-lg p-3 space-y-1">
+                            <div className="flex items-center justify-between">
+                              <span className="text-sm font-medium">{item.customer}</span>
+                              <span className="font-bold">${Math.round(parseFloat(item.dmg_amount))}</span>
+                            </div>
+                            <div className="text-xs text-base-content/50">
+                              {item.dmg_invoice_number} · {item.invoice_date ? item.invoice_date.slice(0,10) : ''}
+                            </div>
+                            <div className="text-xs text-warning">
+                              {item.flag_reason === 'ambiguous' ? '⚠️ Multiple properties could match this amount' : '❓ No matching contracted rate found'}
+                            </div>
+                            {item.match_candidates && (
+                              <div className="text-xs text-base-content/40">
+                                Candidates: {JSON.stringify(item.match_candidates).slice(0, 120)}
+                              </div>
+                            )}
+                            <button
+                              className="btn btn-xs btn-ghost w-full mt-1"
+                              disabled={reviewActionLoading === item.id}
+                              onClick={() => handleIgnoreQueueItem(item.id)}
+                            >
+                              Dismiss (resolve manually)
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    {pendingReviewInvs.length === 0 && reviewQueueItems.length === 0 && (
+                      <div className="text-sm text-base-content/40 text-center py-4">All caught up 🎉</div>
                     )}
                   </div>
                 </div>

@@ -23,6 +23,8 @@ export interface Job {
   metro: string | null;
   status: string;
   notes: string | null;
+  contract_type: string | null;
+  created_at: string | null;
   // joined fields
   sub_name?: string;
 }

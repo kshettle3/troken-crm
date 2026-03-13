@@ -474,6 +474,29 @@ const PayTab: React.FC<PayTabProps> = ({ subId }) => {
 
 // ─── SubDashboard Component ──────────────────────────────────────────────────
 
+interface WeekVisit {
+  job_id: number;
+  property_name: string;
+  metro: string | null;
+  client_name: string | null;
+  scheduled_date: string;
+  completed: boolean;
+  completed_at: string | null;
+}
+
+interface RecentCompletion {
+  job_id: number;
+  property_name: string;
+  metro: string | null;
+  completed_at: string | null;
+}
+
+interface HomeAlerts {
+  overdue: number;
+  lowesDeadline: boolean;
+  seasonalDue: number;
+}
+
 interface SubDashboardProps {
   subs: Sub[];
   jobs: Job[];
@@ -487,7 +510,10 @@ export const SubDashboard: React.FC<SubDashboardProps> = ({ subs, jobs, allServi
   const sub = subs[0];
   if (!sub) return <div className="p-4">No sub assigned.</div>;
 
-  const [activeTab, setActiveTab] = useState<'properties'|'calendar'|'quotes'|'reqs'|'standards'|'pay'>('properties');
+  const [activeTab, setActiveTab] = useState<'home'|'properties'|'calendar'|'quotes'|'reqs'|'standards'|'pay'>('home');
+  const [weekVisits, setWeekVisits] = useState<WeekVisit[]>([]);
+  const [recentCompletions, setRecentCompletions] = useState<RecentCompletion[]>([]);
+  const [alerts, setAlerts] = useState<HomeAlerts>({ overdue: 0, lowesDeadline: false, seasonalDue: 0 });
   const [siteInstructions, setSiteInstructions] = useState<SiteInstruction[]>([]);
   const [expandedInstructionClient, setExpandedInstructionClient] = useState<string|null>(null);
   const [expandedJob, setExpandedJob] = useState<number|null>(null);
@@ -519,6 +545,59 @@ export const SubDashboard: React.FC<SubDashboardProps> = ({ subs, jobs, allServi
         instructions: Array.isArray(r.instructions) ? r.instructions : JSON.parse(r.instructions || '[]')
       }))));
   }, []);
+
+  useEffect(() => {
+    loadHomeData();
+  }, [sub.id]);
+
+  async function loadHomeData() {
+    const now = new Date();
+    const day = now.getDay();
+    const mondayOffset = day === 0 ? -6 : 1 - day;
+    const monday = new Date(now);
+    monday.setDate(now.getDate() + mondayOffset);
+    monday.setHours(0, 0, 0, 0);
+    const sunday = new Date(monday);
+    sunday.setDate(monday.getDate() + 6);
+    const mondayStr = monday.toISOString().split('T')[0];
+    const sundayStr = sunday.toISOString().split('T')[0];
+    const todayStr = now.toISOString().split('T')[0];
+
+    try {
+      const [visits, completions, overdueRows, lowesRows] = await Promise.all([
+        db.query(
+          `SELECT cv.job_id, cv.scheduled_date, cv.completed, cv.completed_at, j.property_name, j.metro, j.client_name ` +
+          `FROM calendar_visits cv JOIN jobs j ON cv.job_id = j.id ` +
+          `WHERE cv.scheduled_date >= '${mondayStr}' AND cv.scheduled_date <= '${sundayStr}' ` +
+          `AND j.sub_id = ${sub.id} ORDER BY j.metro, cv.scheduled_date`
+        ),
+        db.query(
+          `SELECT cv.job_id, cv.completed_at, j.property_name, j.metro ` +
+          `FROM calendar_visits cv JOIN jobs j ON cv.job_id = j.id ` +
+          `WHERE cv.completed = true AND j.sub_id = ${sub.id} ORDER BY cv.completed_at DESC LIMIT 5`
+        ),
+        db.query(
+          `SELECT COUNT(*) as cnt FROM calendar_visits cv JOIN jobs j ON cv.job_id = j.id ` +
+          `WHERE cv.scheduled_date < '${todayStr}' AND cv.completed = false AND j.sub_id = ${sub.id}`
+        ),
+        day >= 3 ? db.query(
+          `SELECT COUNT(*) as cnt FROM calendar_visits cv JOIN jobs j ON cv.job_id = j.id ` +
+          `WHERE cv.scheduled_date >= '${mondayStr}' AND cv.scheduled_date <= '${sundayStr}' ` +
+          `AND cv.completed = false AND j.sub_id = ${sub.id} AND j.client_name ILIKE '%lowe%'`
+        ) : Promise.resolve([{ cnt: '0' }]),
+      ]);
+
+      setWeekVisits(visits as WeekVisit[]);
+      setRecentCompletions(completions as RecentCompletion[]);
+      setAlerts({
+        overdue: parseInt((overdueRows as any)[0]?.cnt ?? '0'),
+        lowesDeadline: day >= 3 && parseInt((lowesRows as any)[0]?.cnt ?? '0') > 0,
+        seasonalDue: 0,
+      });
+    } catch (err) {
+      console.error('Failed to load home data:', err);
+    }
+  }
 
   async function loadNotes(jobId: number) {
     const rows: any = await db.query(
@@ -658,6 +737,9 @@ export const SubDashboard: React.FC<SubDashboardProps> = ({ subs, jobs, allServi
 
       {/* Tab Navigation */}
       <div className="tabs tabs-boxed bg-base-200">
+        <button className={`tab flex-1 ${activeTab === 'home' ? 'tab-active' : ''}`} onClick={() => setActiveTab('home')}>
+          🏠
+        </button>
         <button className={`tab flex-1 ${activeTab === 'properties' ? 'tab-active' : ''}`} onClick={() => setActiveTab('properties')}>
           Sites
         </button>
@@ -677,6 +759,176 @@ export const SubDashboard: React.FC<SubDashboardProps> = ({ subs, jobs, allServi
           <DollarSign size={13} className="mr-0.5" /> Pay
         </button>
       </div>
+
+      {/* Home Dashboard Tab */}
+      {activeTab === 'home' && (() => {
+        const now = new Date();
+        const dayName = now.toLocaleDateString('en-US', { weekday: 'long' });
+        const dateStr = now.toLocaleDateString('en-US', { month: 'long', day: 'numeric' });
+        const rockHillVisits = weekVisits.filter(v => v.metro === 'Rock Hill');
+        const spartanburgVisits = weekVisits.filter(v => v.metro === 'Spartanburg');
+        const otherVisits = weekVisits.filter(v => v.metro !== 'Rock Hill' && v.metro !== 'Spartanburg');
+
+        const navTiles = [
+          { tab: 'properties' as const, icon: '📍', label: 'Sites', sub: `${subJobs.length} active` },
+          { tab: 'calendar' as const, icon: '📅', label: 'Plan', sub: 'Schedule your week' },
+          { tab: 'reqs' as const, icon: '⚠️', label: 'Reqs', sub: upcoming.length > 0 ? `${upcoming.length} due soon` : 'All clear' },
+          { tab: 'standards' as const, icon: '📋', label: 'SOW', sub: 'Field standards' },
+        ];
+
+        return (
+          <div className="space-y-5">
+            {/* Greeting */}
+            <div>
+              <h2 className="text-2xl font-bold">Hey TC 👋</h2>
+              <p className="text-sm text-base-content/50">{dayName}, {dateStr}</p>
+            </div>
+
+            {/* Alert Strip — only shown if there's something to flag */}
+            {(alerts.overdue > 0 || alerts.lowesDeadline || alerts.seasonalDue > 0) && (
+              <div className="space-y-2">
+                {alerts.overdue > 0 && (
+                  <div className="flex items-center gap-2 bg-error/10 border border-error/30 rounded-lg px-3 py-2">
+                    <AlertTriangle size={14} className="text-error shrink-0" />
+                    <span className="text-sm font-medium text-error">{alerts.overdue} overdue visit{alerts.overdue > 1 ? 's' : ''} — check Plan</span>
+                  </div>
+                )}
+                {alerts.lowesDeadline && (
+                  <div className="flex items-center gap-2 bg-warning/10 border border-warning/30 rounded-lg px-3 py-2">
+                    <AlertTriangle size={14} className="text-warning shrink-0" />
+                    <span className="text-sm font-medium text-warning">Lowe's Friday deadline approaching — no Saturday makeup</span>
+                  </div>
+                )}
+                {alerts.seasonalDue > 0 && (
+                  <div className="flex items-center gap-2 bg-info/10 border border-info/30 rounded-lg px-3 py-2">
+                    <Clock size={14} className="text-info shrink-0" />
+                    <span className="text-sm font-medium text-info">{alerts.seasonalDue} seasonal service{alerts.seasonalDue > 1 ? 's' : ''} due within 14 days</span>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Nav Tiles — 2x2 grid */}
+            <div className="grid grid-cols-2 gap-3">
+              {navTiles.map(tile => (
+                <button
+                  key={tile.tab}
+                  className="bg-base-200 hover:bg-base-300 active:scale-95 rounded-xl p-4 text-left transition-all"
+                  onClick={() => setActiveTab(tile.tab)}
+                >
+                  <div className="text-2xl mb-1.5">{tile.icon}</div>
+                  <div className="font-bold text-sm">{tile.label}</div>
+                  <div className="text-xs text-base-content/50 mt-0.5">{tile.sub}</div>
+                </button>
+              ))}
+            </div>
+
+            {/* Pay tile — full width */}
+            <button
+              className="w-full bg-base-200 hover:bg-base-300 active:scale-95 rounded-xl p-4 flex items-center gap-4 transition-all"
+              onClick={() => setActiveTab('pay')}
+            >
+              <div className="text-3xl">💰</div>
+              <div className="text-left">
+                <div className="font-bold text-sm">Pay</div>
+                <div className="text-xs text-base-content/50">View your earnings & payment status</div>
+              </div>
+              <div className="ml-auto text-base-content/30">›</div>
+            </button>
+
+            {/* This Week's Route */}
+            <div>
+              <button
+                className="w-full flex justify-between items-center mb-3"
+                onClick={() => setActiveTab('calendar')}
+              >
+                <h3 className="font-bold text-sm">📍 This Week's Route</h3>
+                <span className="text-xs text-primary font-medium">Open Plan →</span>
+              </button>
+
+              {weekVisits.length === 0 ? (
+                <div className="bg-base-200 rounded-xl p-4 text-center text-sm text-base-content/50">
+                  No visits scheduled this week yet. Open Plan to schedule.
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {rockHillVisits.length > 0 && (
+                    <div className="bg-base-200 rounded-xl p-3">
+                      <div className="text-xs font-semibold text-base-content/40 uppercase tracking-wide mb-2">Rock Hill</div>
+                      <div className="space-y-2">
+                        {rockHillVisits.map((v, i) => (
+                          <div key={i} className="flex justify-between items-center">
+                            <span className={`text-sm ${v.completed ? 'line-through text-base-content/40' : ''}`}>{v.property_name}</span>
+                            <div className="flex items-center gap-2">
+                              {v.completed && <span className="text-success text-xs font-medium">✓ Done</span>}
+                              <span className="text-xs text-base-content/40">
+                                {new Date(v.scheduled_date + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}
+                              </span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {spartanburgVisits.length > 0 && (
+                    <div className="bg-base-200 rounded-xl p-3">
+                      <div className="text-xs font-semibold text-base-content/40 uppercase tracking-wide mb-2">Spartanburg</div>
+                      <div className="space-y-2">
+                        {spartanburgVisits.map((v, i) => (
+                          <div key={i} className="flex justify-between items-center">
+                            <span className={`text-sm ${v.completed ? 'line-through text-base-content/40' : ''}`}>{v.property_name}</span>
+                            <div className="flex items-center gap-2">
+                              {v.completed && <span className="text-success text-xs font-medium">✓ Done</span>}
+                              <span className="text-xs text-base-content/40">
+                                {new Date(v.scheduled_date + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}
+                              </span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {otherVisits.length > 0 && (
+                    <div className="bg-base-200 rounded-xl p-3">
+                      <div className="text-xs font-semibold text-base-content/40 uppercase tracking-wide mb-2">Other</div>
+                      <div className="space-y-2">
+                        {otherVisits.map((v, i) => (
+                          <div key={i} className="flex justify-between items-center">
+                            <span className={`text-sm ${v.completed ? 'line-through text-base-content/40' : ''}`}>{v.property_name}</span>
+                            <div className="flex items-center gap-2">
+                              {v.completed && <span className="text-success text-xs font-medium">✓ Done</span>}
+                              <span className="text-xs text-base-content/40">
+                                {new Date(v.scheduled_date + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}
+                              </span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* Recent Check-ins */}
+            {recentCompletions.length > 0 && (
+              <div>
+                <h3 className="font-bold text-sm mb-2">✅ Recent Check-ins</h3>
+                <div className="bg-base-200 rounded-xl overflow-hidden divide-y divide-base-300">
+                  {recentCompletions.map((c, i) => (
+                    <div key={i} className="flex justify-between items-center px-4 py-2.5">
+                      <span className="text-sm">{c.property_name}</span>
+                      <span className="text-xs text-base-content/40">
+                        {c.completed_at ? new Date(c.completed_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : ''}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        );
+      })()}
 
       {/* Properties Tab */}
       {activeTab === 'properties' && (

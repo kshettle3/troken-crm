@@ -41,6 +41,20 @@ const CATEGORY_LABELS: Record<string, string> = {
   snow: 'Snow Work',
 };
 
+const QB_WEBHOOK = 'https://webhooks.tasklet.ai/v1/public/webhook?token=d4f5d163735228a09f398aa198baf769';
+
+async function fireQBWebhook(payload: object) {
+  try {
+    await fetch(QB_WEBHOOK, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+  } catch (err) {
+    console.warn('QB webhook failed (non-blocking):', err);
+  }
+}
+
 const CATEGORY_ORDER = ['jan_landscape', 'feb_landscape', 'snow'];
 
 function getStatusInfo(status: string) {
@@ -148,6 +162,18 @@ export const SubPayments: React.FC<SubPaymentsProps> = ({ subs, onBack }) => {
         remaining -= apply;
       }
 
+      // Fire QB webhook for expense tracking
+      const fifoPreview = previewFifo(legacy, amount);
+      await fireQBWebhook({
+        event: 'tc_payment_recorded',
+        sub: sub.name,
+        amount,
+        payment_date: paymentDate,
+        notes: paymentNotes || null,
+        categories_applied: fifoPreview.map(f => ({ category: CATEGORY_LABELS[f.category] || f.category, amount: f.applied })),
+        recorded_at: new Date().toISOString(),
+      });
+
       setShowPaymentForm(false);
       setPaymentAmount('');
       setPaymentNotes('');
@@ -176,10 +202,26 @@ export const SubPayments: React.FC<SubPaymentsProps> = ({ subs, onBack }) => {
   async function updateOneOffStatus(job: OneOffJob, newStatus: 'pending_invoice' | 'pending_payment' | 'paid', payDate?: string) {
     setUpdatingOneOff(job.id);
     try {
-      const tcPayDate = newStatus === 'paid' ? (payDate ? `'${payDate}'` : `'${new Date().toISOString().split('T')[0]}'`) : 'NULL';
+      const resolvedDate = payDate || new Date().toISOString().split('T')[0];
+      const tcPayDate = newStatus === 'paid' ? `'${resolvedDate}'` : 'NULL';
       await db.execute(
         `UPDATE one_off_jobs SET invoice_status = '${newStatus}', tc_payment_date = ${tcPayDate} WHERE id = ${job.id}`
       );
+
+      // Fire QB webhook when one-off job is paid to TC
+      if (newStatus === 'paid') {
+        await fireQBWebhook({
+          event: 'tc_payment_recorded',
+          sub: sub.name,
+          amount: job.tc_amount,
+          payment_date: resolvedDate,
+          job_name: job.job_name,
+          dmg_invoice_number: job.dmg_invoice_number || null,
+          notes: `One-off job payment: ${job.job_name}`,
+          recorded_at: new Date().toISOString(),
+        });
+      }
+
       await loadData();
     } catch (err) {
       console.error('Failed to update one-off job:', err);

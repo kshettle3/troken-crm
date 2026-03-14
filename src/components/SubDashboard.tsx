@@ -723,18 +723,6 @@ export const SubDashboard: React.FC<SubDashboardProps> = ({ subs, jobs, allServi
         )}
       </div>
 
-      {/* Summary Cards */}
-      <div className="grid grid-cols-2 gap-3">
-        <div className="bg-base-200 rounded-lg p-3 text-center">
-          <div className="text-base-content/60 text-xs flex items-center justify-center gap-1"><MapPin size={12}/> Sites</div>
-          <div className="text-2xl font-bold">{subJobs.length}</div>
-        </div>
-        <div className="bg-base-200 rounded-lg p-3 text-center">
-          <div className="text-base-content/60 text-xs flex items-center justify-center gap-1"><Clock size={12}/> Due Soon</div>
-          <div className="text-2xl font-bold text-warning">{upcoming.length}</div>
-        </div>
-      </div>
-
       {/* Tab Navigation */}
       <div className="tabs tabs-boxed bg-base-200">
         <button className={`tab flex-1 ${activeTab === 'home' ? 'tab-active' : ''}`} onClick={() => setActiveTab('home')}>

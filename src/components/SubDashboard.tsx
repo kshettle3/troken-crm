@@ -175,7 +175,7 @@ const PayTab: React.FC<PayTabProps> = ({ subId }) => {
         db.query(`SELECT * FROM legacy_balance WHERE sub_id = ${subId} ORDER BY CASE category WHEN 'jan_landscape' THEN 1 WHEN 'feb_landscape' THEN 2 WHEN 'snow' THEN 3 END`),
         db.query(`SELECT * FROM one_off_jobs WHERE sub_id = ${subId} ORDER BY created_at ASC`),
         db.query(`SELECT * FROM legacy_payments WHERE sub_id = ${subId} ORDER BY payment_date DESC`),
-        db.query(`SELECT * FROM contract_invoices WHERE sub_id = ${subId} ORDER BY invoice_date DESC`),
+        db.query(`SELECT * FROM contract_invoices WHERE sub_id = ${subId} AND review_status = 'approved' ORDER BY invoice_date DESC`),
       ]);
       setLegacy(legacyRows as LegacyCategory[]);
       setOneOffJobs(oneOffRows as OneOffJob[]);

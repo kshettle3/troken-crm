@@ -66,9 +66,10 @@ interface SubOverviewProps {
   allServices: Service[];
   onBack: () => void;
   onSelectJob: (id: number) => void;
+  isCrewMode?: boolean;
 }
 
-export const SubOverview: React.FC<SubOverviewProps> = ({ subs, jobs, allServices, onBack, onSelectJob }) => {
+export const SubOverview: React.FC<SubOverviewProps> = ({ subs, jobs, allServices, onBack, onSelectJob, isCrewMode }) => {
   return (
     <div className="p-4 space-y-4">
       <div className="flex items-center gap-3">
@@ -88,15 +89,17 @@ export const SubOverview: React.FC<SubOverviewProps> = ({ subs, jobs, allService
                 <h3 className="text-lg font-bold">{sub.name}</h3>
 
                 {/* Summary stats */}
-                <div className="grid grid-cols-2 gap-3">
+                <div className={`grid gap-3 ${isCrewMode ? 'grid-cols-1' : 'grid-cols-2'}`}>
                   <div className="bg-base-300 rounded-lg p-3 text-center">
                     <div className="text-base-content/60 text-sm flex items-center justify-center gap-1"><MapPin size={14} className="opacity-60" /> Properties</div>
                     <div className="text-2xl font-bold">{subJobs.length}</div>
                   </div>
+                  {!isCrewMode && (
                   <div className="bg-base-300 rounded-lg p-3 text-center">
                     <div className="text-base-content/60 text-sm flex items-center justify-center gap-1"><DollarSign size={14} className="opacity-60" /> Total Owed</div>
                     <div className="text-2xl font-bold">{formatCurrency(totalOwed)}</div>
                   </div>
+                  )}
                 </div>
               </div>
             </div>
@@ -165,7 +168,7 @@ export const SubOverview: React.FC<SubOverviewProps> = ({ subs, jobs, allService
                       <thead>
                         <tr>
                           <th>Property</th>
-                          <th>Pay</th>
+                          {!isCrewMode && <th>Pay</th>}
                           <th>Services & Schedule</th>
                         </tr>
                       </thead>
@@ -181,9 +184,11 @@ export const SubOverview: React.FC<SubOverviewProps> = ({ subs, jobs, allService
                                 <div className="font-medium">{job.property_name}</div>
                                 <div className="text-xs text-base-content/60">{job.property_address}</div>
                               </td>
+                              {!isCrewMode && (
                               <td>
                                 <div>{formatCurrency(pay)}</div>
                               </td>
+                              )}
                               <td>
                                 {jobServices.length === 0 ? (
                                   <span className="text-base-content/60 text-xs">No services</span>

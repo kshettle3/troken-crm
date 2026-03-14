@@ -205,6 +205,7 @@ const App: React.FC = () => {
           allServices={allServices}
           onBack={() => { setView('dashboard'); loadData(); }}
           onSelectJob={handleSelectJob}
+          isCrewMode={subRole === 'crew'}
         />
       );
     case 'sub-payments':

@@ -723,31 +723,6 @@ export const SubDashboard: React.FC<SubDashboardProps> = ({ subs, jobs, allServi
         )}
       </div>
 
-      {/* Tab Navigation */}
-      <div className="tabs tabs-boxed bg-base-200">
-        <button className={`tab flex-1 ${activeTab === 'home' ? 'tab-active' : ''}`} onClick={() => setActiveTab('home')}>
-          🏠
-        </button>
-        <button className={`tab flex-1 ${activeTab === 'properties' ? 'tab-active' : ''}`} onClick={() => setActiveTab('properties')}>
-          Sites
-        </button>
-        <button className={`tab flex-1 ${activeTab === 'calendar' ? 'tab-active' : ''}`} onClick={() => setActiveTab('calendar')}>
-          📅 Plan
-        </button>
-        <button className={`tab flex-1 ${activeTab === 'quotes' ? 'tab-active' : ''}`} onClick={() => setActiveTab('quotes')}>
-          Quotes {pipelineJobs.length > 0 && <span className="badge badge-info badge-xs ml-1">{pipelineJobs.length}</span>}
-        </button>
-        <button className={`tab flex-1 ${activeTab === 'reqs' ? 'tab-active' : ''}`} onClick={() => setActiveTab('reqs')}>
-          Reqs {upcoming.length > 0 && <span className="badge badge-warning badge-xs ml-1">{upcoming.length}</span>}
-        </button>
-        <button className={`tab flex-1 ${activeTab === 'standards' ? 'tab-active' : ''}`} onClick={() => setActiveTab('standards')}>
-          <ClipboardList size={13} className="mr-0.5" /> SOW
-        </button>
-        <button className={`tab flex-1 ${activeTab === 'pay' ? 'tab-active' : ''}`} onClick={() => setActiveTab('pay')}>
-          <DollarSign size={13} className="mr-0.5" /> Pay
-        </button>
-      </div>
-
       {/* Home Dashboard Tab */}
       {activeTab === 'home' && (() => {
         const now = new Date();
@@ -921,6 +896,9 @@ export const SubDashboard: React.FC<SubDashboardProps> = ({ subs, jobs, allServi
       {/* Properties Tab */}
       {activeTab === 'properties' && (
         <div className="space-y-2">
+        <button onClick={() => setActiveTab('home')} className="flex items-center gap-1 text-sm text-base-content/60 hover:text-base-content mb-3">
+          ← Home
+        </button>
           {subJobs.map(job => {
             const jobServices = allServices.filter(s => s.job_id === job.id);
             const pay = calcJobSubCost(job.id, allServices);
@@ -1012,11 +990,16 @@ export const SubDashboard: React.FC<SubDashboardProps> = ({ subs, jobs, allServi
 
       {/* Calendar Tab */}
       {activeTab === 'calendar' && (
+        <div>
+        <button onClick={() => setActiveTab('home')} className="flex items-center gap-1 text-sm text-base-content/60 hover:text-base-content mb-3">
+          ← Home
+        </button>
         <SubCalendar
           jobs={jobs}
           allServices={allServices}
           isPortalMode={isPortalMode}
         />
+        </div>
       )}
 
       {/* Reqs Tab: Due Soon + Visit Schedules */}
@@ -1044,6 +1027,7 @@ export const SubDashboard: React.FC<SubDashboardProps> = ({ subs, jobs, allServi
 
         return (
           <div className="space-y-4">
+          <button onClick={() => setActiveTab('home')} className="flex items-center gap-1 text-sm text-base-content/60 hover:text-base-content mb-3">← Home</button>
             {/* Due Soon */}
             <div>
               <h3 className="text-sm font-bold flex items-center gap-2 mb-2">
@@ -1362,6 +1346,7 @@ export const SubDashboard: React.FC<SubDashboardProps> = ({ subs, jobs, allServi
 
         return (
           <div className="space-y-3">
+          <button onClick={() => setActiveTab('home')} className="flex items-center gap-1 text-sm text-base-content/60 hover:text-base-content mb-3">← Home</button>
             <div className="text-xs text-base-content/60 px-1">
               Field standards and scope of work per client — grass heights, trimming specs, what's in/out of scope.
             </div>
@@ -1412,7 +1397,10 @@ export const SubDashboard: React.FC<SubDashboardProps> = ({ subs, jobs, allServi
 
       {/* Pay Tab */}
       {activeTab === 'pay' && (
-        <PayTab subId={sub.id} subJobs={subJobs} allServices={allServices} totalPay={totalPay} isPortalMode={isPortalMode} />
+        <div>
+          <button onClick={() => setActiveTab('home')} className="flex items-center gap-1 text-sm text-base-content/60 hover:text-base-content mb-3">← Home</button>
+          <PayTab subId={sub.id} subJobs={subJobs} allServices={allServices} totalPay={totalPay} isPortalMode={isPortalMode} />
+        </div>
       )}
     </div>
   );

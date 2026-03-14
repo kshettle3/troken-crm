@@ -27,6 +27,7 @@ const App: React.FC = () => {
   // Sub portal state
   const [loggedInSubId, setLoggedInSubId] = useState<number | null>(null);
   const [loggedInSubName, setLoggedInSubName] = useState<string>('');
+  const [subRole, setSubRole] = useState<'tc' | 'crew'>('tc');
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -56,9 +57,10 @@ const App: React.FC = () => {
     loadData().then(() => setView('dashboard'));
   }
 
-  function handleSubLogin(subId: number, subName: string) {
+  function handleSubLogin(subId: number, subName: string, role: 'tc' | 'crew') {
     setLoggedInSubId(subId);
     setLoggedInSubName(subName);
+    setSubRole(role);
     loadData().then(() => setView('sub-portal'));
   }
 
@@ -139,6 +141,7 @@ const App: React.FC = () => {
           allServices={allServices}
           onBack={handleLogout}
           isPortalMode={true}
+          isCrewMode={subRole === 'crew'}
           loggedInSubName={loggedInSubName}
         />
       );

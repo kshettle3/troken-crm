@@ -12,6 +12,7 @@ interface SubCalendarProps {
   jobs: Job[];
   allServices: Service[];
   isPortalMode?: boolean;
+  isCrewMode?: boolean;
 }
 
 interface CheckInModal {
@@ -33,7 +34,7 @@ interface PropertyInfo {
   countdown: number | null; // days until next visit due, null if no check-in yet
 }
 
-export const SubCalendar: React.FC<SubCalendarProps> = ({ jobs, allServices, isPortalMode }) => {
+export const SubCalendar: React.FC<SubCalendarProps> = ({ jobs, allServices, isPortalMode, isCrewMode }) => {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
   const currentMonth = today.getMonth() + 1;
@@ -84,11 +85,12 @@ export const SubCalendar: React.FC<SubCalendarProps> = ({ jobs, allServices, isP
       const w0 = toDateStr(baseWeekStart);
       const w2end = new Date(baseWeekStart);
       w2end.setDate(w2end.getDate() + 21);
+      const crewFilter = isCrewMode ? ` AND cv.assigned_to_crew = true` : '';
       const rows: any = await db.query(
         `SELECT cv.*, j.property_name, j.metro, j.client_name 
          FROM calendar_visits cv 
          JOIN jobs j ON j.id = cv.job_id 
-         WHERE cv.scheduled_date >= '${w0}' AND cv.scheduled_date < '${toDateStr(w2end)}'
+         WHERE cv.scheduled_date >= '${w0}' AND cv.scheduled_date < '${toDateStr(w2end)}'${crewFilter}
          ORDER BY cv.scheduled_date`
       );
       setVisits(rows);
@@ -97,7 +99,7 @@ export const SubCalendar: React.FC<SubCalendarProps> = ({ jobs, allServices, isP
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [isCrewMode]);
 
   // Load last check-ins for countdown calculation
   const [lastCheckIns, setLastCheckIns] = useState<Record<number, string>>({});
@@ -290,6 +292,20 @@ export const SubCalendar: React.FC<SubCalendarProps> = ({ jobs, allServices, isP
     }
   }
 
+  // Toggle crew assignment on a visit (TC mode only)
+  async function toggleCrewAssignment(visitId: number, currentValue: boolean) {
+    const newVal = !currentValue;
+    setVisits(prev => prev.map(v => v.id === visitId ? { ...v, assigned_to_crew: newVal } : v));
+    try {
+      await db.execute(
+        `UPDATE calendar_visits SET assigned_to_crew = ${newVal} WHERE id = ${visitId}`
+      );
+    } catch (err) {
+      console.error('Failed to toggle crew assignment:', err);
+      loadVisits();
+    }
+  }
+
   // Calculate countdown for a property
   function getPropertyCountdown(jobId: number): { days: number; overdue: boolean } | null {
     const lastCheck = lastCheckIns[jobId];
@@ -372,8 +388,8 @@ export const SubCalendar: React.FC<SubCalendarProps> = ({ jobs, allServices, isP
         DMG Week: {weekLabels[weekOffset]}
       </div>
 
-      {/* Unscheduled Pool */}
-      {unscheduled.length > 0 && (
+      {/* Unscheduled Pool — hidden for crew */}
+      {!isCrewMode && unscheduled.length > 0 && (
         <div className="bg-base-200 rounded-lg p-3 space-y-2">
           <h3 className="text-sm font-bold text-base-content/60 uppercase">
             Unscheduled ({unscheduled.length})
@@ -428,8 +444,8 @@ export const SubCalendar: React.FC<SubCalendarProps> = ({ jobs, allServices, isP
         </div>
       )}
 
-      {/* Day Assign Bar - shows when a property is selected */}
-      {assigning !== null && (
+      {/* Day Assign Bar - shows when a property is selected (TC mode only) */}
+      {!isCrewMode && assigning !== null && (
         <div className="bg-primary/10 border border-primary/30 rounded-lg p-2 sticky top-0 z-10">
           <p className="text-xs text-center mb-2">
             Assign <strong>{propertyInfos.find(p => p.jobId === assigning)?.name}</strong> to:
@@ -472,7 +488,7 @@ export const SubCalendar: React.FC<SubCalendarProps> = ({ jobs, allServices, isP
             key={dateStr}
             className={`rounded-lg border ${isToday ? 'border-primary bg-primary/5' : 'border-base-300 bg-base-200'} ${dragOverDate === dateStr ? 'ring-2 ring-primary ring-offset-1' : ''}`}
             onDragOver={(e) => {
-              if (!isPast(dateStr) && draggingJobId !== null) {
+              if (!isCrewMode && !isPast(dateStr) && draggingJobId !== null) {
                 e.preventDefault();
                 setDragOverDate(dateStr);
               }
@@ -480,11 +496,13 @@ export const SubCalendar: React.FC<SubCalendarProps> = ({ jobs, allServices, isP
             onDragLeave={() => setDragOverDate(null)}
             onDrop={(e) => {
               e.preventDefault();
-              const jobId = parseInt(e.dataTransfer.getData('jobId'));
-              if (jobId && !isPast(dateStr)) {
-                assignToDay(jobId, dateStr);
-                setDraggingJobId(null);
-                setDragOverDate(null);
+              if (!isCrewMode) {
+                const jobId = parseInt(e.dataTransfer.getData('jobId'));
+                if (jobId && !isPast(dateStr)) {
+                  assignToDay(jobId, dateStr);
+                  setDraggingJobId(null);
+                  setDragOverDate(null);
+                }
               }
             }}
           >
@@ -525,6 +543,9 @@ export const SubCalendar: React.FC<SubCalendarProps> = ({ jobs, allServices, isP
                           </span>
                           {info?.isLowes && (
                             <span className="badge badge-error badge-xs">Fri</span>
+                          )}
+                          {!isCrewMode && v.assigned_to_crew && (
+                            <span className="badge badge-accent badge-xs">Crew</span>
                           )}
                         </div>
                         <div className="flex items-center gap-2 text-xs text-base-content/50">
@@ -568,8 +589,18 @@ export const SubCalendar: React.FC<SubCalendarProps> = ({ jobs, allServices, isP
                             <Unlock size={14} />
                           </button>
                         )}
-                        {/* Remove button (only for unchecked, not past) */}
-                        {v.checked_in === 0 && !visitPast && (
+                        {/* Crew assignment toggle (TC mode only, unchecked visits) */}
+                        {!isCrewMode && v.checked_in === 0 && (
+                          <button
+                            className={`btn btn-circle btn-xs ${v.assigned_to_crew ? 'btn-accent' : 'btn-ghost'}`}
+                            title={v.assigned_to_crew ? 'Remove crew assignment' : 'Assign to crew'}
+                            onClick={() => toggleCrewAssignment(v.id, !!v.assigned_to_crew)}
+                          >
+                            👥
+                          </button>
+                        )}
+                        {/* Remove button (only for unchecked, not past, not crew mode) */}
+                        {!isCrewMode && v.checked_in === 0 && !visitPast && (
                           <button
                             className="btn btn-circle btn-xs btn-ghost text-base-content/30"
                             onClick={() => removeVisit(v.id)}

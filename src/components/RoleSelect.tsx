@@ -26,7 +26,7 @@ export const RoleSelect: React.FC<Props> = ({ onOwner, onContractor, onDemo }) =
               className="btn btn-outline btn-lg"
               onClick={onContractor}
             >
-              👷 Contractor Login
+              👷 Crew Login
             </button>
             <div className="divider my-1 text-xs text-base-content/40">DEMO</div>
             <button

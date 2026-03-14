@@ -111,6 +111,7 @@ export interface CalendarVisit {
   unlocked: number;
   week_start: string;
   created_at: string;
+  assigned_to_crew?: boolean;
   // joined
   property_name?: string;
   metro?: string;

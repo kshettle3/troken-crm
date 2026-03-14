@@ -503,10 +503,11 @@ interface SubDashboardProps {
   allServices: Service[];
   onBack: () => void;
   isPortalMode?: boolean;
+  isCrewMode?: boolean;
   loggedInSubName?: string;
 }
 
-export const SubDashboard: React.FC<SubDashboardProps> = ({ subs, jobs, allServices, onBack, isPortalMode, loggedInSubName }) => {
+export const SubDashboard: React.FC<SubDashboardProps> = ({ subs, jobs, allServices, onBack, isPortalMode, isCrewMode, loggedInSubName }) => {
   const sub = subs[0];
   if (!sub) return <div className="p-4">No sub assigned.</div>;
 
@@ -564,17 +565,18 @@ export const SubDashboard: React.FC<SubDashboardProps> = ({ subs, jobs, allServi
     const todayStr = now.toISOString().split('T')[0];
 
     try {
+      const crewFilter = isCrewMode ? ` AND cv.assigned_to_crew = true` : '';
       const [visits, completions, overdueRows, lowesRows] = await Promise.all([
         db.query(
           `SELECT cv.job_id, cv.scheduled_date, cv.completed, cv.completed_at, j.property_name, j.metro, j.client_name ` +
           `FROM calendar_visits cv JOIN jobs j ON cv.job_id = j.id ` +
           `WHERE cv.scheduled_date >= '${mondayStr}' AND cv.scheduled_date <= '${sundayStr}' ` +
-          `AND j.sub_id = ${sub.id} ORDER BY j.metro, cv.scheduled_date`
+          `AND j.sub_id = ${sub.id}${crewFilter} ORDER BY j.metro, cv.scheduled_date`
         ),
         db.query(
           `SELECT cv.job_id, cv.completed_at, j.property_name, j.metro ` +
           `FROM calendar_visits cv JOIN jobs j ON cv.job_id = j.id ` +
-          `WHERE cv.completed = true AND j.sub_id = ${sub.id} ORDER BY cv.completed_at DESC LIMIT 5`
+          `WHERE cv.completed = true AND j.sub_id = ${sub.id}${crewFilter} ORDER BY cv.completed_at DESC LIMIT 5`
         ),
         db.query(
           `SELECT COUNT(*) as cnt FROM calendar_visits cv JOIN jobs j ON cv.job_id = j.id ` +
@@ -743,7 +745,7 @@ export const SubDashboard: React.FC<SubDashboardProps> = ({ subs, jobs, allServi
           <div className="space-y-5">
             {/* Greeting */}
             <div>
-              <h2 className="text-2xl font-bold">Hey TC 👋</h2>
+              <h2 className="text-2xl font-bold">{isCrewMode ? 'Hey Team 👋' : 'Hey TC 👋'}</h2>
               <p className="text-sm text-base-content/50">{dayName}, {dateStr}</p>
             </div>
 
@@ -786,18 +788,20 @@ export const SubDashboard: React.FC<SubDashboardProps> = ({ subs, jobs, allServi
               ))}
             </div>
 
-            {/* Pay tile — full width */}
-            <button
-              className="w-full bg-base-200 hover:bg-base-300 active:scale-95 rounded-xl p-4 flex items-center gap-4 transition-all"
-              onClick={() => setActiveTab('pay')}
-            >
-              <div className="text-3xl">💰</div>
-              <div className="text-left">
-                <div className="font-bold text-sm">Pay</div>
-                <div className="text-xs text-base-content/50">View your earnings & payment status</div>
-              </div>
-              <div className="ml-auto text-base-content/30">›</div>
-            </button>
+            {/* Pay tile — full width (hidden for crew) */}
+            {!isCrewMode && (
+              <button
+                className="w-full bg-base-200 hover:bg-base-300 active:scale-95 rounded-xl p-4 flex items-center gap-4 transition-all"
+                onClick={() => setActiveTab('pay')}
+              >
+                <div className="text-3xl">💰</div>
+                <div className="text-left">
+                  <div className="font-bold text-sm">Pay</div>
+                  <div className="text-xs text-base-content/50">View your earnings & payment status</div>
+                </div>
+                <div className="ml-auto text-base-content/30">›</div>
+              </button>
+            )}
 
             {/* This Week's Route */}
             <div>
@@ -998,6 +1002,7 @@ export const SubDashboard: React.FC<SubDashboardProps> = ({ subs, jobs, allServi
           jobs={jobs}
           allServices={allServices}
           isPortalMode={isPortalMode}
+          isCrewMode={isCrewMode}
         />
         </div>
       )}

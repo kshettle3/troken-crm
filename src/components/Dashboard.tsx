@@ -58,6 +58,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
   const [showReviewPanel, setShowReviewPanel] = useState(false);
   const [reviewActionLoading, setReviewActionLoading] = useState<number | null>(null);
   const [manualMatchSelections, setManualMatchSelections] = useState<Record<number, number>>({});
+  const [jobServices, setJobServices] = useState<Record<number, {per_visit_rate: number, sub_per_visit_rate: number}>>({});
 
   useEffect(() => {
     if (demoMode) return;
@@ -104,6 +105,18 @@ export const Dashboard: React.FC<DashboardProps> = ({
            ORDER BY created_at DESC`
         );
         setReviewQueueItems(rQueue);
+
+        // Load contracted per-visit rates for accurate TC amount calculation
+        const svcRows = await db.query(
+          `SELECT job_id, per_visit_rate, sub_per_visit_rate
+           FROM services
+           WHERE service_type = 'Routine Landscaping Service'`
+        );
+        const svcMap: Record<number, {per_visit_rate: number, sub_per_visit_rate: number}> = {};
+        for (const s of svcRows) {
+          if (!svcMap[s.job_id]) svcMap[s.job_id] = { per_visit_rate: parseFloat(s.per_visit_rate), sub_per_visit_rate: parseFloat(s.sub_per_visit_rate) };
+        }
+        setJobServices(svcMap);
       } catch (e) {
         console.error('Dashboard data fetch error:', e);
       } finally {
@@ -208,7 +221,10 @@ export const Dashboard: React.FC<DashboardProps> = ({
     if (!job) return;
     setReviewActionLoading(item.id);
     try {
-      const tcAmount = Math.round(parseFloat(item.dmg_amount) * ((job.sub_rate_pct ?? 80) / 100));
+      const svc = jobServices[job.id];
+    const tcAmount = svc && svc.per_visit_rate > 0
+      ? Math.round((parseFloat(item.dmg_amount) / svc.per_visit_rate) * svc.sub_per_visit_rate)
+      : Math.round(parseFloat(item.dmg_amount) * ((job.sub_rate_pct ?? 80) / 100));
       // Insert approved contract invoice
       await db.query(
         `INSERT INTO contract_invoices
@@ -430,8 +446,9 @@ export const Dashboard: React.FC<DashboardProps> = ({
                             item.match_candidates ? (Array.isArray(item.match_candidates) ? item.match_candidates : JSON.parse(item.match_candidates)) : [];
                           const selectedJobId = manualMatchSelections[item.id];
                           const selectedJob = selectedJobId ? jobs.find((j: any) => j.id === selectedJobId) : null;
-                          const tcPreview = selectedJob
-                            ? Math.round(parseFloat(item.dmg_amount) * ((selectedJob.sub_rate_pct ?? 80) / 100))
+                          const selectedSvc = selectedJob ? jobServices[selectedJob.id] : null;
+                          const tcPreview = selectedJob && selectedSvc && selectedSvc.per_visit_rate > 0
+                            ? Math.round((parseFloat(item.dmg_amount) / selectedSvc.per_visit_rate) * selectedSvc.sub_per_visit_rate)
                             : null;
                           return (
                             <div key={item.id} className="bg-base-100 rounded-lg p-3 space-y-2">
@@ -462,7 +479,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                                 }
                               </select>
                               {tcPreview !== null && (
-                                <div className="text-xs text-success">TC gets: ${tcPreview} ({selectedJob?.sub_rate_pct ?? 80}%)</div>
+                                <div className="text-xs text-success">TC gets: ${tcPreview}</div>
                               )}
                               <div className="flex gap-2">
                                 <button

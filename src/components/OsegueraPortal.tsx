@@ -145,57 +145,60 @@ export const OsegueraPortal: React.FC<Props> = ({ onBack }) => {
       const dateStr = today.toISOString().split('T')[0];
       const uploadedUrls: string[] = [];
 
-      // Upload each photo to Supabase Storage
-      for (const file of photos) {
+      // Step 1: Upload each photo to Supabase Storage
+      for (let i = 0; i < photos.length; i++) {
+        const file = photos[i];
         const safeName = `${Date.now()}-${file.name.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
         const path = `${selectedJobId}/${dateStr}/${safeName}`;
 
         const { error: uploadError } = await supabase.storage
           .from('aiken-visit-photos')
-          .upload(path, file);
+          .upload(path, file, { contentType: file.type || 'image/jpeg' });
 
-        if (uploadError) throw uploadError;
+        if (uploadError) {
+          alert(`Photo upload failed (${i + 1}/${photos.length}): ${uploadError.message}`);
+          return;
+        }
 
-        // Store the path (not signed URL) — generate signed URLs on-demand when viewing
         uploadedUrls.push(path);
       }
 
-      // Get amount from properties state (not hardcoded)
+      // Step 2: Get amount from properties state
       const prop = properties.find(p => p.job_id === selectedJobId);
       const amount = prop ? prop.per_visit_rate : 0;
 
-      // Build photo paths array for SQL (these are storage paths, safe characters)
+      // Step 3: Build photo paths array and insert invoice
       const pathArrayStr = uploadedUrls.map(u => `'${u.replace(/'/g, "''")}'`).join(',');
 
-      // Insert invoice
-      await db.execute(
-        `INSERT INTO aiken_invoices (job_id, property_name, visit_date, photo_urls, invoice_status, payment_due_date, amount, photos_submitted_at)
-         VALUES (${selectedJobId}, '${selectedPropertyName.replace(/'/g, "''")}', CURRENT_DATE, ARRAY[${pathArrayStr}], 'pending', CURRENT_DATE + INTERVAL '30 days', ${amount}, NOW())`
-      );
+      try {
+        await db.execute(
+          `INSERT INTO aiken_invoices (job_id, property_name, visit_date, photo_urls, invoice_status, payment_due_date, amount, photos_submitted_at)
+           VALUES (${selectedJobId}, '${selectedPropertyName.replace(/'/g, "''")}', CURRENT_DATE, ARRAY[${pathArrayStr}], 'pending', CURRENT_DATE + INTERVAL '30 days', ${amount}, NOW())`
+        );
+      } catch (dbErr: any) {
+        alert(`Photos uploaded but invoice save failed: ${dbErr?.message || 'Unknown error'}`);
+        return;
+      }
 
       const dueDate = new Date(today);
       dueDate.setDate(dueDate.getDate() + 30);
       setSubmitSuccess(`Visit submitted! Payment of ${formatCurrency(amount)} due by ${formatDate(dueDate.toISOString().split('T')[0])}`);
 
-      // Fire webhook → agent emails TC + texts Kenny
+      // Step 4: Fire webhook → agent emails TC + texts Kenny (non-blocking)
       const webhookUrl = import.meta.env.VITE_OSEGUERA_WEBHOOK;
       if (webhookUrl) {
-        try {
-          await fetch(webhookUrl, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              event: 'oseguera_visit_submitted',
-              property_name: selectedPropertyName,
-              job_id: selectedJobId,
-              visit_date: new Date().toISOString().split('T')[0],
-              photo_paths: uploadedUrls,
-              amount,
-            }),
-          });
-        } catch (_) {
-          // Non-blocking — submission already saved
-        }
+        fetch(webhookUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            event: 'oseguera_visit_submitted',
+            property_name: selectedPropertyName,
+            job_id: selectedJobId,
+            visit_date: dateStr,
+            photo_paths: uploadedUrls,
+            amount,
+          }),
+        }).catch(() => {});
       }
 
       // Reset form
@@ -207,9 +210,9 @@ export const OsegueraPortal: React.FC<Props> = ({ onBack }) => {
 
       // Reload data
       await loadData();
-    } catch (err) {
+    } catch (err: any) {
       console.error('Submit failed:', err);
-      alert('Failed to submit visit. Please try again.');
+      alert(`Submit failed: ${err?.message || 'Unknown error'}`);
     } finally {
       setSubmitting(false);
     }

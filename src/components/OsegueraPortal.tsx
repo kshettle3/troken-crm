@@ -7,6 +7,33 @@ interface Props {
   onBack: () => void;
 }
 
+// Compress images client-side before uploading (iPhone photos can be 5-15MB)
+function compressImage(file: File, maxWidth = 1600, quality = 0.7): Promise<Blob> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      let { width, height } = img;
+      if (width > maxWidth) {
+        height = Math.round((height * maxWidth) / width);
+        width = maxWidth;
+      }
+      const canvas = document.createElement('canvas');
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return reject(new Error('Canvas not supported'));
+      ctx.drawImage(img, 0, 0, width, height);
+      canvas.toBlob(
+        blob => blob ? resolve(blob) : reject(new Error('Compression failed')),
+        'image/jpeg',
+        quality
+      );
+    };
+    img.onerror = () => reject(new Error('Failed to load image'));
+    img.src = URL.createObjectURL(file);
+  });
+}
+
 interface PropertyInfo {
   job_id: number;
   property_name: string;
@@ -145,15 +172,21 @@ export const OsegueraPortal: React.FC<Props> = ({ onBack }) => {
       const dateStr = today.toISOString().split('T')[0];
       const uploadedUrls: string[] = [];
 
-      // Step 1: Upload each photo to Supabase Storage
+      // Step 1: Compress and upload each photo to Supabase Storage
       for (let i = 0; i < photos.length; i++) {
         const file = photos[i];
-        const safeName = `${Date.now()}-${file.name.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
+        let uploadBlob: Blob;
+        try {
+          uploadBlob = await compressImage(file);
+        } catch {
+          uploadBlob = file; // fallback to original if compression fails
+        }
+        const safeName = `${Date.now()}-${file.name.replace(/[^a-zA-Z0-9._-]/g, '_').replace(/\.(heic|heif)$/i, '.jpg')}`;
         const path = `${selectedJobId}/${dateStr}/${safeName}`;
 
         const { error: uploadError } = await supabase.storage
           .from('aiken-visit-photos')
-          .upload(path, file, { contentType: file.type || 'image/jpeg' });
+          .upload(path, uploadBlob, { contentType: 'image/jpeg' });
 
         if (uploadError) {
           alert(`Photo upload failed (${i + 1}/${photos.length}): ${uploadError.message}`);

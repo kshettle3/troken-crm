@@ -57,6 +57,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
   const [reviewQueueItems, setReviewQueueItems] = useState<any[]>([]);
   const [showReviewPanel, setShowReviewPanel] = useState(false);
   const [reviewActionLoading, setReviewActionLoading] = useState<number | null>(null);
+  const [manualMatchSelections, setManualMatchSelections] = useState<Record<number, number>>({});
 
   useEffect(() => {
     if (demoMode) return;
@@ -195,6 +196,41 @@ export const Dashboard: React.FC<DashboardProps> = ({
         `UPDATE dmg_invoice_review_queue SET review_status = 'ignored' WHERE id = ` + itemId
       );
       setReviewQueueItems(prev => prev.filter(i => i.id !== itemId));
+    } finally {
+      setReviewActionLoading(null);
+    }
+  };
+
+  const handleAssignAndApprove = async (item: any) => {
+    const jobId = manualMatchSelections[item.id];
+    if (!jobId) return;
+    const job = jobs.find((j: any) => j.id === jobId);
+    if (!job) return;
+    setReviewActionLoading(item.id);
+    try {
+      const tcAmount = Math.round(parseFloat(item.dmg_amount) * ((job.sub_rate_pct ?? 80) / 100));
+      // Insert approved contract invoice
+      await db.query(
+        `INSERT INTO contract_invoices
+          (job_id, crm_property_name, customer, dmg_invoice_number, invoice_date,
+           dmg_amount, tc_amount, invoice_status, review_status, sync_source)
+         VALUES
+          (${jobId}, '${job.property_name.replace(/'/g, "''")}', '${(item.customer || '').replace(/'/g, "''")}',
+           '${(item.dmg_invoice_number || '').replace(/'/g, "''")}', '${item.invoice_date ? item.invoice_date.slice(0,10) : ''}',
+           ${parseFloat(item.dmg_amount)}, ${tcAmount}, 'unpaid', 'approved', 'manual_match')`
+      );
+      // Mark queue item resolved
+      await db.query(
+        `UPDATE dmg_invoice_review_queue
+         SET review_status = 'resolved', approved_job_id = ${jobId}, approved_tc_amount = ${tcAmount}, reviewed_at = NOW()
+         WHERE id = ${item.id}`
+      );
+      setReviewQueueItems(prev => prev.filter(i => i.id !== item.id));
+      // Refresh contractInvs total
+      const cInvs = await db.query(
+        `SELECT tc_amount, invoice_status FROM contract_invoices WHERE invoice_status != 'paid' AND review_status = 'approved'`
+      );
+      setContractInvs(cInvs);
     } finally {
       setReviewActionLoading(null);
     }
@@ -389,32 +425,64 @@ export const Dashboard: React.FC<DashboardProps> = ({
                     {reviewQueueItems.length > 0 && (
                       <div className="space-y-2">
                         <div className="text-xs font-semibold text-warning">⚠️ Needs Manual Match</div>
-                        {reviewQueueItems.map((item: any) => (
-                          <div key={item.id} className="bg-base-100 rounded-lg p-3 space-y-1">
-                            <div className="flex items-center justify-between">
-                              <span className="text-sm font-medium">{item.customer}</span>
-                              <span className="font-bold">${Math.round(parseFloat(item.dmg_amount))}</span>
-                            </div>
-                            <div className="text-xs text-base-content/50">
-                              {item.dmg_invoice_number} · {item.invoice_date ? item.invoice_date.slice(0,10) : ''}
-                            </div>
-                            <div className="text-xs text-warning">
-                              {item.flag_reason === 'ambiguous' ? '⚠️ Multiple properties could match this amount' : '❓ No matching contracted rate found'}
-                            </div>
-                            {item.match_candidates && (
-                              <div className="text-xs text-base-content/40">
-                                Candidates: {JSON.stringify(item.match_candidates).slice(0, 120)}
+                        {reviewQueueItems.map((item: any) => {
+                          const candidates: {job_id: number, property_name: string}[] =
+                            item.match_candidates ? (Array.isArray(item.match_candidates) ? item.match_candidates : JSON.parse(item.match_candidates)) : [];
+                          const selectedJobId = manualMatchSelections[item.id];
+                          const selectedJob = selectedJobId ? jobs.find((j: any) => j.id === selectedJobId) : null;
+                          const tcPreview = selectedJob
+                            ? Math.round(parseFloat(item.dmg_amount) * ((selectedJob.sub_rate_pct ?? 80) / 100))
+                            : null;
+                          return (
+                            <div key={item.id} className="bg-base-100 rounded-lg p-3 space-y-2">
+                              <div className="flex items-center justify-between">
+                                <span className="text-sm font-medium">{item.customer}</span>
+                                <span className="font-bold">${Math.round(parseFloat(item.dmg_amount))}</span>
                               </div>
-                            )}
-                            <button
-                              className="btn btn-xs btn-ghost w-full mt-1"
-                              disabled={reviewActionLoading === item.id}
-                              onClick={() => handleIgnoreQueueItem(item.id)}
-                            >
-                              Dismiss (resolve manually)
-                            </button>
-                          </div>
-                        ))}
+                              <div className="text-xs text-base-content/50">
+                                {item.dmg_invoice_number} · {item.invoice_date ? item.invoice_date.slice(0,10) : ''}
+                              </div>
+                              <div className="text-xs text-warning">
+                                {item.flag_reason === 'ambiguous' ? '⚠️ Multiple properties could match — pick one below' : '❓ No matching contracted rate found'}
+                              </div>
+                              {/* Property selector */}
+                              <select
+                                className="select select-bordered select-xs w-full"
+                                value={selectedJobId ?? ''}
+                                onChange={e => setManualMatchSelections(prev => ({...prev, [item.id]: parseInt(e.target.value)}))}
+                              >
+                                <option value="">— Select property —</option>
+                                {candidates.length > 0
+                                  ? candidates.map((c: any) => (
+                                      <option key={c.job_id} value={c.job_id}>{c.property_name}</option>
+                                    ))
+                                  : jobs.filter((j: any) => j.status === 'active').map((j: any) => (
+                                      <option key={j.id} value={j.id}>{j.property_name}</option>
+                                    ))
+                                }
+                              </select>
+                              {tcPreview !== null && (
+                                <div className="text-xs text-success">TC gets: ${tcPreview} ({selectedJob?.sub_rate_pct ?? 80}%)</div>
+                              )}
+                              <div className="flex gap-2">
+                                <button
+                                  className="btn btn-xs btn-success flex-1"
+                                  disabled={!selectedJobId || reviewActionLoading === item.id}
+                                  onClick={() => handleAssignAndApprove(item)}
+                                >
+                                  {reviewActionLoading === item.id ? '...' : '✓ Assign & Approve'}
+                                </button>
+                                <button
+                                  className="btn btn-xs btn-ghost"
+                                  disabled={reviewActionLoading === item.id}
+                                  onClick={() => handleIgnoreQueueItem(item.id)}
+                                >
+                                  Dismiss
+                                </button>
+                              </div>
+                            </div>
+                          );
+                        })}
                       </div>
                     )}
 

@@ -2,7 +2,7 @@ import React, { useState, useRef } from 'react';
 import { db } from '../db'
 
 interface Props {
-  onSuccess: (subId: number, subName: string, role: 'tc' | 'crew') => void;
+  onSuccess: (subId: number, subName: string, role: 'tc' | 'crew' | 'oseguera') => void;
   onBack: () => void;
 }
 
@@ -43,7 +43,8 @@ export const SubLogin: React.FC<Props> = ({ onSuccess, onBack }) => {
       );
       if (rows.length > 0) {
         const sub = rows[0] as any;
-        onSuccess(sub.id, sub.name, 'tc');
+        const role = (sub.id === 3 || (sub.name as string).toLowerCase().includes('oseguera')) ? 'oseguera' : 'tc';
+        onSuccess(sub.id, sub.name, role);
       } else if (code === '1234') {
         onSuccess(1, 'Crew Lead', 'crew');
       } else {

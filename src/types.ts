@@ -131,4 +131,4 @@ export interface SubPayment {
   created_at: string;
 }
 
-export type View = 'role-select' | 'owner-login' | 'sub-login' | 'sub-portal' | 'dashboard' | 'job-detail' | 'add-job' | 'edit-job' | 'sub-overview' | 'sub-dashboard' | 'pipeline' | 'pipeline-detail' | 'pipeline-new' | 'pipeline-edit' | 'sub-payments';
+export type View = 'role-select' | 'owner-login' | 'sub-login' | 'sub-portal' | 'oseguera-portal' | 'dashboard' | 'job-detail' | 'add-job' | 'edit-job' | 'sub-overview' | 'sub-dashboard' | 'pipeline' | 'pipeline-detail' | 'pipeline-new' | 'pipeline-edit' | 'sub-payments';

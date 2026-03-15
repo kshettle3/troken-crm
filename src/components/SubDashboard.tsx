@@ -497,6 +497,104 @@ interface HomeAlerts {
   seasonalDue: number;
 }
 
+// ─── Aiken Tab (TC view) ─────────────────────────────────────────────
+const AikenTab: React.FC<{ onBack: () => void }> = ({ onBack }) => {
+  const [aikenProperties, setAikenProperties] = useState<any[]>([]);
+  const [totalDeductions, setTotalDeductions] = useState(0);
+  const [loadingAiken, setLoadingAiken] = useState(true);
+
+  useEffect(() => {
+    (async () => {
+      setLoadingAiken(true);
+      try {
+        // Get Aiken properties
+        const jobRows = await db.query(
+          `SELECT j.id as job_id, j.property_name, j.property_address FROM jobs j WHERE j.sub_id = 3 AND j.metro = 'Aiken' ORDER BY j.property_name`
+        );
+
+        const firstOfMonth = (() => {
+          const d = new Date();
+          return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-01`;
+        })();
+
+        const props: any[] = [];
+        for (const j of jobRows as any[]) {
+          // Last invoice for this property
+          const lastInv = await db.query(
+            `SELECT visit_date, status FROM aiken_invoices WHERE job_id = ${j.job_id} ORDER BY visit_date DESC LIMIT 1`
+          );
+          // Visit count this month
+          const visitCount = await db.query(
+            `SELECT COUNT(*) as cnt FROM aiken_invoices WHERE job_id = ${j.job_id} AND visit_date >= '${firstOfMonth}'`
+          );
+          props.push({
+            ...j,
+            last_visit_date: lastInv.length > 0 ? (lastInv[0] as any).visit_date : null,
+            last_visit_status: lastInv.length > 0 ? (lastInv[0] as any).status : null,
+            visits_this_month: visitCount.length > 0 ? Number((visitCount[0] as any).cnt) : 0,
+          });
+        }
+        setAikenProperties(props);
+
+        // Total deductions (paid only)
+        const dedRows = await db.query(
+          `SELECT COALESCE(SUM(amount), 0) as total FROM aiken_invoices WHERE status = 'paid'`
+        );
+        setTotalDeductions(dedRows.length > 0 ? Number((dedRows[0] as any).total) : 0);
+      } catch (err) {
+        console.error('Failed to load Aiken data:', err);
+      } finally {
+        setLoadingAiken(false);
+      }
+    })();
+  }, []);
+
+  if (loadingAiken) {
+    return (
+      <div className="flex justify-center py-12">
+        <span className="loading loading-spinner loading-md text-primary" />
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      <button onClick={onBack} className="flex items-center gap-1 text-sm text-base-content/60 hover:text-base-content">← Home</button>
+      <div>
+        <h2 className="text-lg font-bold">Aiken Properties</h2>
+        <p className="text-xs text-base-content/50">2 properties in Aiken, SC</p>
+      </div>
+
+      {aikenProperties.map((prop: any) => (
+        <div key={prop.job_id} className="bg-base-200 rounded-xl p-4 space-y-2">
+          <div className="font-bold text-sm">{prop.property_name}</div>
+          <div className="text-xs text-base-content/50">{prop.property_address}</div>
+          <div className="flex justify-between items-center">
+            <div className="text-xs text-base-content/40">
+              {prop.last_visit_date
+                ? <>Last visit: {formatDate(prop.last_visit_date)} — <span className={
+                    prop.last_visit_status === 'paid' ? 'text-success' :
+                    prop.last_visit_status === 'approved' ? 'text-info' : 'text-warning'
+                  }>{prop.last_visit_status}</span></>
+                : 'No visits yet'}
+            </div>
+            <div className="text-xs text-base-content/40">
+              {prop.visits_this_month} visit{prop.visits_this_month !== 1 ? 's' : ''} this month
+            </div>
+          </div>
+        </div>
+      ))}
+
+      {/* Deduction Total */}
+      <div className="bg-error/10 border border-error/20 rounded-xl p-4 text-center">
+        <div className="text-xs text-base-content/50 mb-1">Total Deductions</div>
+        <div className="text-2xl font-bold text-error">{formatCurrency(totalDeductions)}</div>
+        <div className="text-xs text-base-content/40 mt-1">Deducted from your balance when paid</div>
+      </div>
+    </div>
+  );
+};
+
 interface SubDashboardProps {
   subs: Sub[];
   jobs: Job[];
@@ -511,7 +609,7 @@ export const SubDashboard: React.FC<SubDashboardProps> = ({ subs, jobs, allServi
   const sub = subs[0];
   if (!sub) return <div className="p-4">No sub assigned.</div>;
 
-  const [activeTab, setActiveTab] = useState<'home'|'properties'|'calendar'|'quotes'|'reqs'|'standards'|'pay'>('home');
+  const [activeTab, setActiveTab] = useState<'home'|'properties'|'calendar'|'quotes'|'reqs'|'standards'|'pay'|'aiken'>('home');
   const [weekVisits, setWeekVisits] = useState<WeekVisit[]>([]);
   const [recentCompletions, setRecentCompletions] = useState<RecentCompletion[]>([]);
   const [alerts, setAlerts] = useState<HomeAlerts>({ overdue: 0, lowesDeadline: false, seasonalDue: 0 });
@@ -798,6 +896,21 @@ export const SubDashboard: React.FC<SubDashboardProps> = ({ subs, jobs, allServi
                 <div className="text-left">
                   <div className="font-bold text-sm">Pay</div>
                   <div className="text-xs text-base-content/50">View your earnings & payment status</div>
+                </div>
+                <div className="ml-auto text-base-content/30">›</div>
+              </button>
+            )}
+
+            {/* Aiken tile — full width (hidden for crew) */}
+            {!isCrewMode && (
+              <button
+                className="w-full bg-base-200 hover:bg-base-300 active:scale-95 rounded-xl p-4 flex items-center gap-4 transition-all"
+                onClick={() => setActiveTab('aiken')}
+              >
+                <div className="text-3xl">🌍</div>
+                <div className="text-left">
+                  <div className="font-bold text-sm">Aiken</div>
+                  <div className="text-xs text-base-content/50">Aiken properties & deductions</div>
                 </div>
                 <div className="ml-auto text-base-content/30">›</div>
               </button>
@@ -1407,6 +1520,9 @@ export const SubDashboard: React.FC<SubDashboardProps> = ({ subs, jobs, allServi
           <PayTab subId={sub.id} subJobs={subJobs} allServices={allServices} totalPay={totalPay} isPortalMode={isPortalMode} />
         </div>
       )}
+
+      {/* Aiken Tab */}
+      {activeTab === 'aiken' && <AikenTab onBack={() => setActiveTab('home')} />}
     </div>
   );
 };

@@ -645,6 +645,7 @@ const AikenTab: React.FC<{ onBack: () => void }> = ({ onBack }) => {
 };
 
 interface SubDashboardProps {
+  loggedInSubId?: number;
   subs: Sub[];
   jobs: Job[];
   allServices: Service[];
@@ -654,8 +655,8 @@ interface SubDashboardProps {
   loggedInSubName?: string;
 }
 
-export const SubDashboard: React.FC<SubDashboardProps> = ({ subs, jobs, allServices, onBack, isPortalMode, isCrewMode, loggedInSubName }) => {
-  const sub = subs[0];
+export const SubDashboard: React.FC<SubDashboardProps> = ({ subs, jobs, allServices, onBack, isPortalMode, isCrewMode, loggedInSubId, loggedInSubName }) => {
+  const sub = (loggedInSubId ? subs.find(s => s.id === loggedInSubId) : null) ?? subs[0];
   if (!sub) return <div className="p-4">No sub assigned.</div>;
 
   const [activeTab, setActiveTab] = useState<'home'|'properties'|'calendar'|'quotes'|'reqs'|'standards'|'pay'|'aiken'>('home');

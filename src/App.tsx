@@ -149,6 +149,7 @@ const App: React.FC = () => {
           onBack={handleLogout}
           isPortalMode={true}
           isCrewMode={subRole === 'crew'}
+          loggedInSubId={loggedInSubId ?? undefined}
           loggedInSubName={loggedInSubName}
         />
       );

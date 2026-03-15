@@ -507,38 +507,25 @@ const AikenTab: React.FC<{ onBack: () => void }> = ({ onBack }) => {
     (async () => {
       setLoadingAiken(true);
       try {
-        // Get Aiken properties
         const jobRows = await db.query(
           `SELECT j.id as job_id, j.property_name, j.property_address FROM jobs j WHERE j.sub_id = 3 AND j.metro = 'Aiken' ORDER BY j.property_name`
         );
 
-        const firstOfMonth = (() => {
-          const d = new Date();
-          return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-01`;
-        })();
-
         const props: any[] = [];
         for (const j of jobRows as any[]) {
-          // Last invoice for this property
-          const lastInv = await db.query(
-            `SELECT visit_date, status FROM aiken_invoices WHERE job_id = ${j.job_id} ORDER BY visit_date DESC LIMIT 1`
+          // All invoices for this property, newest first
+          const invoices = await db.query(
+            `SELECT id, visit_date, amount, invoice_status, payment_due_date, payment_date
+             FROM aiken_invoices WHERE job_id = ${j.job_id}
+             ORDER BY visit_date DESC`
           );
-          // Visit count this month
-          const visitCount = await db.query(
-            `SELECT COUNT(*) as cnt FROM aiken_invoices WHERE job_id = ${j.job_id} AND visit_date >= '${firstOfMonth}'`
-          );
-          props.push({
-            ...j,
-            last_visit_date: lastInv.length > 0 ? (lastInv[0] as any).visit_date : null,
-            last_visit_status: lastInv.length > 0 ? (lastInv[0] as any).status : null,
-            visits_this_month: visitCount.length > 0 ? Number((visitCount[0] as any).cnt) : 0,
-          });
+          props.push({ ...j, invoices });
         }
         setAikenProperties(props);
 
-        // Total deductions (paid only)
+        // Total deductions = what's actually been paid out
         const dedRows = await db.query(
-          `SELECT COALESCE(SUM(amount), 0) as total FROM aiken_invoices WHERE status = 'paid'`
+          `SELECT COALESCE(SUM(amount), 0) as total FROM aiken_invoices WHERE invoice_status = 'paid'`
         );
         setTotalDeductions(dedRows.length > 0 ? Number((dedRows[0] as any).total) : 0);
       } catch (err) {
@@ -548,6 +535,13 @@ const AikenTab: React.FC<{ onBack: () => void }> = ({ onBack }) => {
       }
     })();
   }, []);
+
+  const getDaysUntilDue = (dueDateStr: string) => {
+    const due = new Date(dueDateStr);
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    return Math.round((due.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+  };
 
   if (loadingAiken) {
     return (
@@ -566,22 +560,48 @@ const AikenTab: React.FC<{ onBack: () => void }> = ({ onBack }) => {
       </div>
 
       {aikenProperties.map((prop: any) => (
-        <div key={prop.job_id} className="bg-base-200 rounded-xl p-4 space-y-2">
-          <div className="font-bold text-sm">{prop.property_name}</div>
-          <div className="text-xs text-base-content/50">{prop.property_address}</div>
-          <div className="flex justify-between items-center">
-            <div className="text-xs text-base-content/40">
-              {prop.last_visit_date
-                ? <>Last visit: {formatDate(prop.last_visit_date)} — <span className={
-                    prop.last_visit_status === 'paid' ? 'text-success' :
-                    prop.last_visit_status === 'approved' ? 'text-info' : 'text-warning'
-                  }>{prop.last_visit_status}</span></>
-                : 'No visits yet'}
-            </div>
-            <div className="text-xs text-base-content/40">
-              {prop.visits_this_month} visit{prop.visits_this_month !== 1 ? 's' : ''} this month
-            </div>
+        <div key={prop.job_id} className="bg-base-200 rounded-xl p-4 space-y-3">
+          <div>
+            <div className="font-bold text-sm">{prop.property_name}</div>
+            <div className="text-xs text-base-content/50">{prop.property_address}</div>
           </div>
+
+          {prop.invoices.length === 0 ? (
+            <div className="text-xs text-base-content/40">No visits submitted yet</div>
+          ) : (
+            <div className="space-y-2">
+              {prop.invoices.map((inv: any) => {
+                const isPaid = inv.invoice_status === 'paid';
+                const daysUntil = inv.payment_due_date ? getDaysUntilDue(inv.payment_due_date) : null;
+                const isOverdue = daysUntil !== null && daysUntil < 0;
+
+                return (
+                  <div key={inv.id} className="bg-base-100 rounded-lg p-3 flex justify-between items-center">
+                    <div className="space-y-0.5">
+                      <div className="text-xs font-medium">Visit: {formatDate(inv.visit_date)}</div>
+                      {isPaid ? (
+                        <div className="text-xs text-success">✓ Paid {inv.payment_date ? formatDate(inv.payment_date) : ''}</div>
+                      ) : inv.payment_due_date ? (
+                        <div className={`text-xs ${isOverdue ? 'text-error font-medium' : 'text-base-content/50'}`}>
+                          {isOverdue
+                            ? `Overdue by ${Math.abs(daysUntil!)} day${Math.abs(daysUntil!) !== 1 ? 's' : ''}`
+                            : `Due ${formatDate(inv.payment_due_date)} · ${daysUntil} day${daysUntil !== 1 ? 's' : ''}`}
+                        </div>
+                      ) : (
+                        <div className="text-xs text-base-content/40">Pending</div>
+                      )}
+                    </div>
+                    <div className="text-right">
+                      <div className="text-sm font-bold">{formatCurrency(inv.amount)}</div>
+                      <div className={`text-xs badge badge-sm mt-1 ${isPaid ? 'badge-success' : isOverdue ? 'badge-error' : 'badge-warning'}`}>
+                        {isPaid ? 'Paid' : isOverdue ? 'Overdue' : 'Pending'}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
       ))}
 

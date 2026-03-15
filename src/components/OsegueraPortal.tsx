@@ -169,8 +169,8 @@ export const OsegueraPortal: React.FC<Props> = ({ onBack }) => {
 
       // Insert invoice
       await db.execute(
-        `INSERT INTO aiken_invoices (job_id, property_name, visit_date, photo_urls, status, due_date, amount)
-         VALUES (${selectedJobId}, '${selectedPropertyName.replace(/'/g, "''")}', CURRENT_DATE, ARRAY[${pathArrayStr}], 'submitted', CURRENT_DATE + INTERVAL '30 days', ${amount})`
+        `INSERT INTO aiken_invoices (job_id, property_name, visit_date, photo_urls, invoice_status, payment_due_date, amount, photos_submitted_at)
+         VALUES (${selectedJobId}, '${selectedPropertyName.replace(/'/g, "''")}', CURRENT_DATE, ARRAY[${pathArrayStr}], 'pending', CURRENT_DATE + INTERVAL '30 days', ${amount}, NOW())`
       );
 
       const dueDate = new Date(today);

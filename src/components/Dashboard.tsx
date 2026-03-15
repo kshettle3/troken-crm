@@ -59,6 +59,22 @@ export const Dashboard: React.FC<DashboardProps> = ({
   const [reviewActionLoading, setReviewActionLoading] = useState<number | null>(null);
   const [manualMatchSelections, setManualMatchSelections] = useState<Record<number, number>>({});
   const [jobServices, setJobServices] = useState<Record<number, {per_visit_rate: number, sub_per_visit_rate: number}>>({});
+  const [novoBalance, setNovoBalance] = useState<number | null>(null);
+  const [novoBalanceDate, setNovoBalanceDate] = useState<string | null>(null);
+  const [weeklyDmgTotal, setWeeklyDmgTotal] = useState<number>(0);
+  const [weeklyDmgCount, setWeeklyDmgCount] = useState<number>(0);
+
+  // Current Sat–Fri week window (calculated once at mount)
+  const _wnow = new Date();
+  const _wdow = _wnow.getDay(); // 0=Sun ... 6=Sat
+  const _wDaysSinceSat = _wdow === 6 ? 0 : _wdow + 1;
+  const _wSat = new Date(_wnow); _wSat.setDate(_wnow.getDate() - _wDaysSinceSat);
+  const _wFri = new Date(_wSat); _wFri.setDate(_wSat.getDate() + 6);
+  const _wPad = (n: number) => String(n).padStart(2, '0');
+  const _wFmt = (d: Date) => `${d.getFullYear()}-${_wPad(d.getMonth()+1)}-${_wPad(d.getDate())}`;
+  const weekSatStr = _wFmt(_wSat);
+  const weekFriStr = _wFmt(_wFri);
+  const weekLabel = `${_wSat.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} – ${_wFri.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`;
 
   useEffect(() => {
     if (demoMode) return;
@@ -117,6 +133,34 @@ export const Dashboard: React.FC<DashboardProps> = ({
           if (!svcMap[s.job_id]) svcMap[s.job_id] = { per_visit_rate: parseFloat(s.per_visit_rate), sub_per_visit_rate: parseFloat(s.sub_per_visit_rate) };
         }
         setJobServices(svcMap);
+
+        // Novo balance from QB agent daily push
+        try {
+          const [novoRow] = await db.query(
+            `SELECT value_numeric, updated_at FROM financial_settings WHERE key = 'novo_balance'`
+          );
+          if (novoRow && novoRow.value_numeric != null) {
+            setNovoBalance(parseFloat(novoRow.value_numeric));
+            setNovoBalanceDate(novoRow.updated_at ? novoRow.updated_at.slice(0, 10) : null);
+          }
+        } catch (_e) { /* table not yet populated */ }
+
+        // DMG incoming this week (Sat–Fri window)
+        try {
+          const [wkRow] = await db.query(
+            `SELECT COUNT(*)::int as count, COALESCE(SUM(dmg_amount), 0) as total
+             FROM contract_invoices
+             WHERE review_status = 'approved'
+               AND invoice_status != 'paid'
+               AND dmg_expected_payment_date >= '${weekSatStr}'
+               AND dmg_expected_payment_date <= '${weekFriStr}'`
+          );
+          if (wkRow) {
+            setWeeklyDmgTotal(parseFloat(wkRow.total) || 0);
+            setWeeklyDmgCount(parseInt(wkRow.count) || 0);
+          }
+        } catch (_e) { /* ignore */ }
+
       } catch (e) {
         console.error('Dashboard data fetch error:', e);
       } finally {
@@ -345,6 +389,28 @@ export const Dashboard: React.FC<DashboardProps> = ({
                     <div className="text-xs text-accent font-semibold uppercase">Pipeline</div>
                     <div className="text-2xl font-bold text-accent">{pipelineJobs.length}</div>
                     <div className="text-xs text-base-content/50">open jobs</div>
+                  </div>
+                </div>
+                {/* Card 5: Novo Balance */}
+                <div className="card bg-success/10 border border-success/20">
+                  <div className="card-body p-3">
+                    <div className="text-xs text-success font-semibold uppercase">🏦 Novo Balance</div>
+                    <div className="text-2xl font-bold text-success">
+                      {novoBalance != null ? `$${Math.round(novoBalance).toLocaleString()}` : '—'}
+                    </div>
+                    <div className="text-xs text-base-content/50">
+                      {novoBalanceDate ? `as of ${novoBalanceDate}` : 'awaiting QB sync'}
+                    </div>
+                  </div>
+                </div>
+                {/* Card 6: DMG Incoming This Week */}
+                <div className="card bg-info/10 border border-info/20">
+                  <div className="card-body p-3">
+                    <div className="text-xs text-info font-semibold uppercase">📅 DMG In This Week</div>
+                    <div className="text-2xl font-bold text-info">${Math.round(weeklyDmgTotal).toLocaleString()}</div>
+                    <div className="text-xs text-base-content/50">
+                      {weeklyDmgCount} invoice{weeklyDmgCount !== 1 ? 's' : ''} · {weekLabel}
+                    </div>
                   </div>
                 </div>
               </div>

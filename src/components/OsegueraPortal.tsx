@@ -177,6 +177,27 @@ export const OsegueraPortal: React.FC<Props> = ({ onBack }) => {
       dueDate.setDate(dueDate.getDate() + 30);
       setSubmitSuccess(`Visit submitted! Payment of ${formatCurrency(amount)} due by ${formatDate(dueDate.toISOString().split('T')[0])}`);
 
+      // Fire webhook → agent emails TC + texts Kenny
+      const webhookUrl = import.meta.env.VITE_OSEGUERA_WEBHOOK;
+      if (webhookUrl) {
+        try {
+          await fetch(webhookUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              event: 'oseguera_visit_submitted',
+              property_name: selectedPropertyName,
+              job_id: selectedJobId,
+              visit_date: new Date().toISOString().split('T')[0],
+              photo_paths: uploadedUrls,
+              amount,
+            }),
+          });
+        } catch (_) {
+          // Non-blocking — submission already saved
+        }
+      }
+
       // Reset form
       setPhotos([]);
       setPhotoPreviewUrls([]);

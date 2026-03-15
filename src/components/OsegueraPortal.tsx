@@ -111,7 +111,7 @@ export const OsegueraPortal: React.FC<Props> = ({ onBack }) => {
 
       // Load invoices
       const invRows = await db.query(
-        `SELECT * FROM aiken_invoices ORDER BY visit_date DESC`
+        `SELECT id, job_id, property_name, visit_date, photo_urls, invoice_status as status, payment_due_date as due_date, paid_date, amount, notes, created_at FROM aiken_invoices ORDER BY visit_date DESC`
       );
       setInvoices(invRows as unknown as Invoice[]);
     } catch (err) {
@@ -123,8 +123,7 @@ export const OsegueraPortal: React.FC<Props> = ({ onBack }) => {
 
   function getStatusBadge(status: string) {
     switch (status) {
-      case 'submitted': return <span className="badge badge-warning badge-sm">Submitted</span>;
-      case 'approved': return <span className="badge badge-info badge-sm">Approved</span>;
+      case 'pending': return <span className="badge badge-warning badge-sm">Pending</span>;
       case 'paid': return <span className="badge badge-success badge-sm">Paid</span>;
       default: return <span className="badge badge-ghost badge-sm">{status}</span>;
     }
@@ -428,7 +427,7 @@ export const OsegueraPortal: React.FC<Props> = ({ onBack }) => {
                       ? 'border-primary bg-primary/10'
                       : 'border-base-300 bg-base-200 hover:bg-base-300'
                   }`}
-                  onClick={() => { setSelectedJobId(prop.job_id); setSelectedPropertyName(prop.property_name); }}
+                  onClick={() => { setSelectedJobId(prop.job_id); setSelectedPropertyName(prop.property_name); setPhotos([]); setPhotoPreviewUrls([]); setSubmitSuccess(null); }}
                 >
                   <div className="font-bold text-xs">{prop.property_name}</div>
                   <div className="text-xs text-base-content/50 mt-1">{formatCurrency(prop.per_visit_rate)} / visit</div>

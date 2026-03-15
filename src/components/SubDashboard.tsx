@@ -172,12 +172,13 @@ const PayTab: React.FC<PayTabProps> = ({ subId }) => {
   async function loadData() {
     setLoading(true);
     try {
+      const todayISO = new Date().toISOString().split('T')[0];
       const [legacyRows, oneOffRows, paymentRows, contractRows, aikenRows] = await Promise.all([
         db.query(`SELECT * FROM legacy_balance WHERE sub_id = ${subId} ORDER BY CASE category WHEN 'jan_landscape' THEN 1 WHEN 'feb_landscape' THEN 2 WHEN 'snow' THEN 3 END`),
         db.query(`SELECT * FROM one_off_jobs WHERE sub_id = ${subId} ORDER BY created_at ASC`),
         db.query(`SELECT * FROM legacy_payments WHERE sub_id = ${subId} ORDER BY payment_date DESC`),
         db.query(`SELECT * FROM contract_invoices WHERE sub_id = ${subId} AND review_status = 'approved' ORDER BY invoice_date DESC`),
-        db.query(`SELECT ai.id, j.property_name, ai.visit_date, ai.payment_due_date, ai.amount, ai.invoice_status FROM aiken_invoices ai JOIN jobs j ON j.id = ai.job_id WHERE ai.payment_due_date <= CURRENT_DATE ORDER BY ai.payment_due_date ASC`),
+        db.query(`SELECT ai.id, ai.property_name, ai.visit_date, ai.payment_due_date, ai.amount, ai.invoice_status FROM aiken_invoices ai WHERE ai.payment_due_date <= '${todayISO}' ORDER BY ai.payment_due_date ASC`).catch(() => []),
       ]);
       setLegacy(legacyRows as LegacyCategory[]);
       setOneOffJobs(oneOffRows as OneOffJob[]);

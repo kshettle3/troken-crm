@@ -159,6 +159,7 @@ const PayTab: React.FC<PayTabProps> = ({ subId }) => {
   const [oneOffJobs, setOneOffJobs] = useState<OneOffJob[]>([]);
   const [legacyPayments, setLegacyPayments] = useState<LegacyPaymentRecord[]>([]);
   const [contractInvoices, setContractInvoices] = useState<ContractInvoice[]>([]);
+  const [aikenDeductions, setAikenDeductions] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [expandedOneOff, setExpandedOneOff] = useState<number | null>(null);
   const [expandedLegacy, setExpandedLegacy] = useState(false);
@@ -171,16 +172,18 @@ const PayTab: React.FC<PayTabProps> = ({ subId }) => {
   async function loadData() {
     setLoading(true);
     try {
-      const [legacyRows, oneOffRows, paymentRows, contractRows] = await Promise.all([
+      const [legacyRows, oneOffRows, paymentRows, contractRows, aikenRows] = await Promise.all([
         db.query(`SELECT * FROM legacy_balance WHERE sub_id = ${subId} ORDER BY CASE category WHEN 'jan_landscape' THEN 1 WHEN 'feb_landscape' THEN 2 WHEN 'snow' THEN 3 END`),
         db.query(`SELECT * FROM one_off_jobs WHERE sub_id = ${subId} ORDER BY created_at ASC`),
         db.query(`SELECT * FROM legacy_payments WHERE sub_id = ${subId} ORDER BY payment_date DESC`),
         db.query(`SELECT * FROM contract_invoices WHERE sub_id = ${subId} AND review_status = 'approved' ORDER BY invoice_date DESC`),
+        db.query(`SELECT ai.id, j.property_name, ai.visit_date, ai.payment_due_date, ai.amount, ai.invoice_status FROM aiken_invoices ai JOIN jobs j ON j.id = ai.job_id WHERE ai.payment_due_date <= CURRENT_DATE ORDER BY ai.payment_due_date ASC`),
       ]);
       setLegacy(legacyRows as LegacyCategory[]);
       setOneOffJobs(oneOffRows as OneOffJob[]);
       setLegacyPayments(paymentRows as LegacyPaymentRecord[]);
       setContractInvoices(contractRows as ContractInvoice[]);
+      setAikenDeductions(aikenRows as any[]);
     } catch (err) {
       console.error('Failed to load pay data:', err);
     } finally {
@@ -200,7 +203,8 @@ const PayTab: React.FC<PayTabProps> = ({ subId }) => {
   const legacyRemaining = legacy.reduce((s, c) => s + (c.original_amount - c.paid_amount), 0);
   const oneOffPending = oneOffJobs.filter(j => j.invoice_status !== 'paid').reduce((s, j) => s + j.tc_amount, 0);
   const contractPending = contractInvoices.filter(i => i.invoice_status !== 'paid').reduce((s, i) => s + i.tc_amount, 0);
-  const totalOwed = legacyRemaining + oneOffPending + contractPending;
+  const aikenDeductedTotal = aikenDeductions.reduce((s, d) => s + Number(d.amount), 0);
+  const totalOwed = legacyRemaining + oneOffPending + contractPending - aikenDeductedTotal;
 
   // Sort categories in FIFO order
   const sortedLegacy = [...legacy].sort((a, b) =>
@@ -219,7 +223,7 @@ const PayTab: React.FC<PayTabProps> = ({ subId }) => {
           <div className="text-xs text-base-content/60 uppercase tracking-wide font-semibold mb-1">Total Owed to You</div>
           <div className="text-4xl font-bold">{formatCurrency(Math.round(totalOwed))}</div>
           <div className="text-xs text-base-content/50 mt-1">
-            {formatCurrency(Math.round(legacyRemaining))} prior work · {formatCurrency(Math.round(oneOffPending))} one-off · {formatCurrency(Math.round(contractPending))} March contract
+            {formatCurrency(Math.round(legacyRemaining))} prior work · {formatCurrency(Math.round(oneOffPending))} one-off · {formatCurrency(Math.round(contractPending))} March contract{aikenDeductedTotal > 0 ? ` · -${formatCurrency(Math.round(aikenDeductedTotal))} Aiken` : ''}
           </div>
         </div>
       </div>
@@ -467,6 +471,30 @@ const PayTab: React.FC<PayTabProps> = ({ subId }) => {
           )}
         </div>
       </div>
+
+      {/* ── Aiken Deductions ── */}
+      {aikenDeductedTotal > 0 && (
+        <div className="card bg-base-200">
+          <div className="card-body p-3">
+            <div className="flex items-center justify-between mb-2">
+              <span className="font-semibold text-sm">Aiken Deductions</span>
+              <span className="text-sm font-bold text-error">-{formatCurrency(Math.round(aikenDeductedTotal))}</span>
+            </div>
+            <div className="text-xs text-base-content/50 mb-3">Subtracted from your balance on visit due date</div>
+            <div className="space-y-2">
+              {aikenDeductions.map((d: any) => (
+                <div key={d.id} className="flex items-center justify-between text-sm bg-base-300 rounded-lg px-3 py-2">
+                  <div>
+                    <div className="font-medium">{d.property_name}</div>
+                    <div className="text-xs text-base-content/50">Visit: {formatDate(d.visit_date)} · Due: {formatDate(d.payment_due_date)}</div>
+                  </div>
+                  <div className="font-bold text-error">-{formatCurrency(Math.round(Number(d.amount)))}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
 
     </div>
   );

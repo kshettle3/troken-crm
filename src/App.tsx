@@ -12,6 +12,7 @@ import { PipelineList } from './components/PipelineList';
 import { PipelineForm } from './components/PipelineForm';
 import { PipelineDetail } from './components/PipelineDetail';
 import { SubPayments } from './components/SubPayments';
+import { OsegueraPortal } from './components/OsegueraPortal';
 import { db } from './db'
 
 const App: React.FC = () => {
@@ -27,7 +28,7 @@ const App: React.FC = () => {
   // Sub portal state
   const [loggedInSubId, setLoggedInSubId] = useState<number | null>(null);
   const [loggedInSubName, setLoggedInSubName] = useState<string>('');
-  const [subRole, setSubRole] = useState<'tc' | 'crew'>('tc');
+  const [subRole, setSubRole] = useState<'tc' | 'crew' | 'oseguera'>('tc');
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -57,11 +58,15 @@ const App: React.FC = () => {
     loadData().then(() => setView('dashboard'));
   }
 
-  function handleSubLogin(subId: number, subName: string, role: 'tc' | 'crew') {
+  function handleSubLogin(subId: number, subName: string, role: 'tc' | 'crew' | 'oseguera') {
     setLoggedInSubId(subId);
     setLoggedInSubName(subName);
     setSubRole(role);
-    loadData().then(() => setView('sub-portal'));
+    if (role === 'oseguera') {
+      loadData().then(() => setView('oseguera-portal'));
+    } else {
+      loadData().then(() => setView('sub-portal'));
+    }
   }
 
   function handleLogout() {
@@ -133,6 +138,8 @@ const App: React.FC = () => {
           onBack={() => setView('role-select')}
         />
       );
+    case 'oseguera-portal':
+      return <OsegueraPortal onBack={handleLogout} />;
     case 'sub-portal':
       return (
         <SubDashboard

@@ -222,9 +222,9 @@ export const Dashboard: React.FC<DashboardProps> = ({
     setReviewActionLoading(item.id);
     try {
       const svc = jobServices[job.id];
-    const tcAmount = svc && svc.per_visit_rate > 0
-      ? Math.round((parseFloat(item.dmg_amount) / svc.per_visit_rate) * svc.sub_per_visit_rate)
-      : Math.round(parseFloat(item.dmg_amount) * ((job.sub_rate_pct ?? 80) / 100));
+      const tcAmount = svc && svc.per_visit_rate > 0
+        ? Math.round((parseFloat(item.dmg_amount) / svc.per_visit_rate) * svc.sub_per_visit_rate)
+        : Math.round(parseFloat(item.dmg_amount) * ((job.sub_rate_pct ?? 80) / 100));
       // Insert approved contract invoice
       await db.query(
         `INSERT INTO contract_invoices

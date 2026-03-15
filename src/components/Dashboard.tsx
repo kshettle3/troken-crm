@@ -238,7 +238,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
       // Mark queue item resolved
       await db.query(
         `UPDATE dmg_invoice_review_queue
-         SET review_status = 'resolved', approved_job_id = ${jobId}, approved_tc_amount = ${tcAmount}, reviewed_at = NOW()
+         SET review_status = 'approved', approved_job_id = ${jobId}, approved_tc_amount = ${tcAmount}, reviewed_at = NOW()
          WHERE id = ${item.id}`
       );
       setReviewQueueItems(prev => prev.filter(i => i.id !== item.id));
